@@ -1,0 +1,23 @@
+[
+  {
+    "name": "english",
+    "audio_filename": "english-note.webm",
+    "audio_content": "fixture-english-audio",
+    "transcript": "add two tomatoes to the fridge",
+    "language": "en"
+  },
+  {
+    "name": "hindi",
+    "audio_filename": "hindi-note.webm",
+    "audio_content": "fixture-hindi-audio",
+    "transcript": "do tamatar fridge mein daalo",
+    "language": "hi"
+  },
+  {
+    "name": "hinglish",
+    "audio_filename": "hinglish-note.webm",
+    "audio_content": "fixture-hinglish-audio",
+    "transcript": "add one dhaniya bunch",
+    "language": "hi"
+  }
+]

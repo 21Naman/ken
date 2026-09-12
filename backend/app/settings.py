@@ -1,0 +1,37 @@
+from functools import lru_cache
+import os
+from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def enable_local_only_defaults() -> None:
+    """Disable Hugging Face Hub network checks unless an operator opts out."""
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+
+
+class Settings(BaseSettings):
+    """Runtime configuration loaded from environment variables or a local .env file."""
+
+    model_config = SettingsConfigDict(env_file=".env", env_prefix="HOUSEHOLD_", extra="ignore")
+
+    database_url: str = "sqlite:///./data/household.db"
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "qwen3:4b"
+    vision_model: str = "qwen2.5vl:3b"
+    vision_request_timeout_seconds: float = Field(default=60.0, gt=0)
+    whisper_model: str = "base"
+    request_timeout_seconds: float = Field(default=10.0, gt=0)
+
+    @property
+    def database_path(self) -> Path | None:
+        prefix = "sqlite:///"
+        if not self.database_url.startswith(prefix) or self.database_url == "sqlite:///:memory:":
+            return None
+        return Path(self.database_url.removeprefix(prefix))
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

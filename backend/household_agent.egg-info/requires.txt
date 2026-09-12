@@ -1,0 +1,13 @@
+APScheduler<4.0,>=3.10
+fastapi<1.0,>=0.115
+httpx<1.0,>=0.27
+pydantic-settings<3.0,>=2.6
+python-multipart<1.0,>=0.0.9
+sqlmodel<1.0,>=0.0.22
+uvicorn[standard]<1.0,>=0.30
+
+[dev]
+pytest<9.0,>=8.0
+
+[voice]
+faster-whisper<2.0,>=1.1
