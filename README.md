@@ -18,6 +18,11 @@ cloud service is part of the product.
   It is needed only for real voice transcription; typed and photo capture work
   without it.
 - Qwen2.5-VL is pulled via Ollama, not pip — no extra Python dependency.
+- Qwen3:4b is also pulled via ollama. not pip. 
+
+qwen3:4b is required via Ollama for local language tasks, cook briefs, feedback parsing, and healthy-model checks.
+qwen2.5vl:3b is optional via Ollama for photo capture.
+faster-whisper is optional for voice transcription; it is a speech-recognition model, not an LLM.
 
 Install the application and its frontend dependencies once:
 
