@@ -1,5 +1,8 @@
 # Household Agent
 
+THE VIDEO : https://drive.google.com/file/d/1EVIrCM3PMpEKOL4zr0f2pemd_MNA-23w/view?usp=sharing
+
+
 Household Agent is a local-first household-orchestration prototype. It keeps
 durable household memory in SQLite, produces deterministic and explainable meal
 plans, routes consequential actions through a visible approval workflow, records
