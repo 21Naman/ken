@@ -4,6 +4,10 @@ import httpx
 
 from app.settings import get_settings
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def send_whatsapp_message(to: str, body: str) -> None:
     """Send a text reply via Meta WhatsApp Cloud API. Raises on HTTP failure."""
@@ -28,4 +32,8 @@ def send_whatsapp_message(to: str, body: str) -> None:
                 "text": {"body": body[:4096]},
             },
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError:
+            logger.warning("whatsapp send to %s failed: %s", to, response.text[:500])
+            raise
