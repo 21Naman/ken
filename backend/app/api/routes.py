@@ -356,7 +356,7 @@ def discover_dishes(household_id: int, settings: Settings = Depends(get_settings
         dish = {
             "name": name, "ingredients": clean_ingredients,
             "prep_minutes": max(0, int(prep_minutes or 0)), "servings": max(1, int(servings or 1)),
-            "nutrition_notes": [str(note) for note in raw.get("nutrition_notes", []) if isinstance(note, str)],
+            "nutrition_notes": [note for note in raw.get("nutrition_notes", []) if isinstance(note, str)],
             "cook_skill_required": str(raw.get("cook_skill_required", "beginner")),
             "rationale": str(raw.get("rationale", "Uses your current inventory.")),
             "is_new": known is None, "dish_id": known.id if known else None,

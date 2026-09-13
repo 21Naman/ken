@@ -97,7 +97,7 @@ def _quantity_by_name(inventory: list[dict[str, Any]], today: date) -> dict[str,
         expiry = item.get("expiry_date")
         if expiry:
             try:
-                exp_date = date.fromisoformat(str(expiry)) if isinstance(expiry, str) else expiry
+                exp_date = date.fromisoformat(expiry) if isinstance(expiry, str) else expiry
                 if exp_date < today:
                     continue
             except (ValueError, TypeError):
