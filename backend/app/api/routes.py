@@ -637,6 +637,7 @@ def zepto_cart(household_id: int, payload: ZeptoCartRequest, settings: Settings 
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     total = float(cart.get("total_amount_inr", cart.get("total", sum(item["price_inr"] * item["quantity"] for item in items_added))) or 0)
     loop = _create(session, MealLoopRecord, household_id, {"trigger_type": "zepto_cart", "context_note": payload.dish_name, "status": "recorded"})
+    assert loop.id is not None
     session.add(AuditEvent(household_id=household_id, meal_loop_id=loop.id, event="zepto_cart_created", detail=f"{payload.dish_name}: {len(items_added)} Zepto items added")); session.commit()
     # Cart creation must never place an order. Zepto's checkout/payment page is
     # where the user explicitly chooses UPI/COD and confirms the real order.
