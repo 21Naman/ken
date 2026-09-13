@@ -75,6 +75,28 @@ class OllamaProvider:
             raise ValueError("Structured Ollama output must be a JSON object")
         return decoded
 
+    def generate_text(self, prompt: str) -> str:
+        """Plain-text generation for conversational surfaces (e.g. WhatsApp).
+
+        Existing structured callers are untouched; this is additive only.
+        """
+        with httpx.Client(timeout=self.timeout) as client:
+            response = client.post(
+                f"{self.base_url}/api/generate",
+                json={
+                    "model": self.model,
+                    "prompt": prompt,
+                    "think": False,
+                    "stream": False,
+                    "options": {"temperature": 0},
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("response"), str):
+            raise ValueError("Ollama text response must include a string response field")
+        return payload["response"].strip()
+
     def generate_structured(self, prompt: str) -> dict[str, Any]:
         with httpx.Client(timeout=self.timeout) as client:
             response = client.post(f"{self.base_url}/api/generate", json={"model": self.model, "prompt": prompt, "format": "json", "think": False, "stream": False, "options": {"temperature": 0}})

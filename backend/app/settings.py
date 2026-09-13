@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     zepto_token_encryption_key: str | None = None
     zepto_mock_enabled: bool = False
     frontend_url: str = "http://localhost:5173"
+    whatsapp_access_token: str | None = None
+    whatsapp_phone_number_id: str | None = None
+    whatsapp_verify_token: str | None = None
+    whatsapp_api_version: str = "v22.0"
+    whatsapp_agent_timeout_seconds: float = Field(default=120.0, gt=0)
 
     @property
     def database_path(self) -> Path | None:

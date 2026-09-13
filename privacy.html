@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — Household Agent</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; }
+  h1 { font-size: 1.6rem; }
+</style>
+</head>
+<body>
+<h1>Privacy Policy — Household Agent</h1>
+<p><strong>Effective date:</strong> September 13, 2026</p>
+
+<p>Household Agent ("the App") is a local-first household-orchestration prototype.
+This policy describes what data the App processes when you interact with it,
+including via the WhatsApp Cloud API integration.</p>
+
+<h2>1. Data we process</h2>
+<ul>
+  <li><strong>WhatsApp phone number and message content:</strong> when you message
+    the App's WhatsApp number, Meta delivers your phone number (WhatsApp user ID)
+    and message text to our webhook so we can reply.</li>
+  <li><strong>Household data you enter:</strong> inventory, dishes, preferences,
+    and schedules you provide through the App, stored in a local SQLite database.</li>
+</ul>
+
+<h2>2. How we use it</h2>
+<ul>
+  <li>To generate a reply to your WhatsApp message using a locally hosted language
+    model (Ollama). Message text is used only to produce the reply.</li>
+  <li>To operate household features you explicitly use (meal plans, inventory,
+    scheduling).</li>
+</ul>
+
+<h2>3. What we do not do</h2>
+<ul>
+  <li>We do not sell, rent, or share your personal data with third parties for
+    marketing or advertising.</li>
+  <li>We do not use your messages for any purpose other than replying and
+    operating the features you request.</li>
+</ul>
+
+<h2>4. Storage and retention</h2>
+<p>Household data is stored locally in the App's SQLite database. WhatsApp message
+IDs are kept in short-lived server memory solely to ignore duplicate deliveries
+from Meta. Message content is not retained beyond what is needed to reply, unless
+you explicitly save resulting data (e.g. inventory entries) through the App.</p>
+
+<h2>5. Meta's processing</h2>
+<p>WhatsApp messages transit Meta's WhatsApp Cloud API, which applies
+<a href="https://www.whatsapp.com/legal/privacy-policy">Meta's own privacy policy</a>.
+We have no control over Meta's handling of data on its systems.</p>
+
+<h2>6. Your choices</h2>
+<p>Stop messaging the App's WhatsApp number at any time to stop further WhatsApp
+processing. To request deletion of stored household data, contact us below.</p>
+
+<h2>7. Contact</h2>
+<p>Questions or deletion requests: <strong>REPLACE_WITH_CONTACT_EMAIL</strong></p>
+
+<h2>8. Changes</h2>
+<p>We will update this page if the policy changes. Continued use of the App after
+changes take effect constitutes acceptance.</p>
+</body>
+</html>
