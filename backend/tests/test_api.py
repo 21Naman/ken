@@ -453,6 +453,33 @@ def test_discover_dishes_marks_existing_recipes_and_returns_new_recipes(monkeypa
     app.dependency_overrides.clear()
 
 
+def test_empty_inventory_discovery_returns_a_zepto_ready_starter_basket(monkeypatch):
+    client, engine = make_client(monkeypatch, OllamaHealth("available", "qwen3:4b"))
+    captured_prompt: list[str] = []
+    response = {"dishes": [
+        {"name": "Dal Tadka", "ingredients": [{"name": "toor dal", "quantity": 1, "unit": "cup"}, {"name": "tomato", "quantity": 2, "unit": "piece"}], "prep_minutes": 30, "servings": 2, "nutrition_notes": ["vegetarian"], "cook_skill_required": "beginner", "rationale": "A healthy family staple."},
+        {"name": "Paneer Bhurji", "ingredients": [{"name": "paneer", "quantity": 250, "unit": "g"}, {"name": "onion", "quantity": 1, "unit": "piece"}], "prep_minutes": 20, "servings": 2, "nutrition_notes": ["vegetarian"], "cook_skill_required": "beginner", "rationale": "Protein-rich and quick."},
+        {"name": "Sambar Rice", "ingredients": [{"name": "rice", "quantity": 1, "unit": "cup"}, {"name": "sambar powder", "quantity": 2, "unit": "tbsp"}], "prep_minutes": 35, "servings": 2, "nutrition_notes": ["vegetarian"], "cook_skill_required": "beginner", "rationale": "A balanced comfort meal."},
+    ]}
+
+    def discover(*args):
+        captured_prompt.append(args[1])
+        return response
+
+    monkeypatch.setattr(OllamaProvider, "generate_structured", discover)
+    with client:
+        household_id = client.post("/api/demo/reset").json()["household_id"]
+        with Session(engine) as session:
+            for lot in session.exec(select(InventoryLot).where(InventoryLot.household_id == household_id)):
+                session.delete(lot)
+            session.commit()
+        discovered = client.post(f"/api/households/{household_id}/discover-dishes").json()["dishes"]
+    assert len(discovered) == 3
+    assert all(dish["missing_ingredients"] for dish in discovered)
+    assert "When inventory is empty" in captured_prompt[0]
+    app.dependency_overrides.clear()
+
+
 def test_discovered_recipe_reports_gaps_price_estimate_and_can_request_approval(monkeypatch):
     client, _ = make_client(monkeypatch, OllamaHealth("available", "qwen3:4b"))
     pizza = {"dishes": [{"name": "Pan Pizza", "ingredients": [{"name": "flour", "quantity": 300, "unit": "g"}, {"name": "tomato sauce", "quantity": 3, "unit": "tbsp"}, {"name": "cheese", "quantity": 200, "unit": "g"}, {"name": "yeast", "quantity": 1, "unit": "packet"}], "prep_minutes": 30, "servings": 2, "nutrition_notes": ["vegetarian"], "cook_skill_required": "beginner", "rationale": "Uses flour, sauce, and cheese."}]}

@@ -181,6 +181,29 @@ def _inventory_recipe_hints(inventory: list[InventoryLot]) -> list[dict[str, Any
             "prep_minutes": 35, "servings": 2, "nutrition_notes": ["vegetarian"],
             "cook_skill_required": "beginner",
             "rationale": "Your flour, tomato sauce, cheese, and oregano are a direct match for pizza; yeast is the only core missing ingredient.",
+        }, {
+            "name": "Cheesy Tomato Flatbread",
+            "ingredients": [
+                {"name": "flour", "quantity": 250, "unit": "g"},
+                {"name": "tomato sauce", "quantity": 100, "unit": "ml"},
+                {"name": "cheese", "quantity": 150, "unit": "g"},
+                {"name": "oregano", "quantity": 1, "unit": "tsp"},
+            ],
+            "prep_minutes": 20, "servings": 2, "nutrition_notes": ["vegetarian"],
+            "cook_skill_required": "beginner",
+            "rationale": "A no-yeast skillet flatbread that uses the stocked pizza ingredients and basic salt, oil, and water.",
+        }, {
+            "name": "Herby Cheese Pasta",
+            "ingredients": [
+                {"name": "pasta", "quantity": 250, "unit": "g"},
+                {"name": "tomato sauce", "quantity": 150, "unit": "ml"},
+                {"name": "cheese", "quantity": 100, "unit": "g"},
+                {"name": "oregano", "quantity": 1, "unit": "tsp"},
+                {"name": "garlic", "quantity": 2, "unit": "cloves"},
+            ],
+            "prep_minutes": 25, "servings": 2, "nutrition_notes": ["vegetarian"],
+            "cook_skill_required": "beginner",
+            "rationale": "Your sauce, cheese, and oregano become a quick dinner with just pasta and garlic from Zepto.",
         }]
     return []
 
@@ -532,16 +555,18 @@ def discover_dishes(household_id: int, settings: Settings = Depends(get_settings
     """Ask the local model for cookable ideas; saving an idea remains explicit."""
     _household(session, household_id)
     inventory = [item for item in _list(session, InventoryLot, household_id) if item.quantity > 0]
-    if not inventory:
-        return {"dishes": []}
     ingredient_list = [{"name": item.ingredient, "quantity": item.quantity, "unit": item.unit} for item in inventory]
+    members = _list(session, HouseholdMember, household_id)
+    dietary_preferences = sorted({preference.strip() for member in members for preference in member.dietary_preferences if preference.strip()})
+    dietary_profile = dietary_preferences or ["no stated dietary restrictions"]
     prompt = (
         "Return JSON only in this exact shape: {\"dishes\":[{\"name\":string,\"ingredients\":[{\"name\":string,\"quantity\":number,\"unit\":string}],"
         "\"prep_minutes\":number,\"servings\":number,\"nutrition_notes\":[string],\"cook_skill_required\":string,\"rationale\":string}]}. "
-        "Suggest 1 to 3 feasible, simple dishes that can be made using primarily the available household ingredients. "
-        "IMPORTANT: For each dish, list ALL core ingredients required to prepare it properly (including common staples or ingredients that might be missing from inventory like yeast, eggs, spices, or toppings) so the system can calculate shopping gaps. "
-        "Do not invent bizarre combinations just to fit only available ingredients (e.g. if flour, cheese, and tomato sauce are present, suggest Pizza with any missing items like yeast or toppings included). "
-        f"Available inventory: {ingredient_list}"
+        "Suggest 3 to 4 distinct, appetizing dinner dishes for this household based on its dietary preferences and inventory. "
+        "When inventory is non-empty, include at least one dish that uses only in-stock ingredients (basic salt, oil, and water are allowed), and at least two creative dishes that use mostly stocked base ingredients plus exactly 1 or 2 missing fresh gap ingredients suitable for a 10-minute Zepto order, such as herbs, vegetables, paneer, eggs, or cream. "
+        "When inventory is empty, instead suggest exactly 3 popular, healthy family dinner dishes tailored to the dietary profile. List every core ingredient for each dish so all of them are marked as gaps and can be bought as a starter basket on Zepto. "
+        "For every dish, list ALL core ingredients required to prepare it properly, including ingredients that are missing, so the system can calculate shopping gaps. Do not invent bizarre combinations merely to fit the inventory. "
+        f"Household dietary preferences: {dietary_profile}. Available inventory: {ingredient_list}"
     )
     proposed = _inventory_recipe_hints(inventory)
     if not proposed:
@@ -559,7 +584,7 @@ def discover_dishes(household_id: int, settings: Settings = Depends(get_settings
     budget_remaining = max(0, (budget.monthly_limit - budget.spent_amount - budget.planned_amount) if budget else 0)
     stores = [item.model_dump() for item in session.exec(select(DemoStoreItem))]
     dishes: list[dict[str, Any]] = []
-    for raw in proposed[:3]:
+    for raw in proposed[:4]:
         if not isinstance(raw, dict) or not isinstance(raw.get("name"), str) or not raw["name"].strip():
             continue
         raw_ingredients = raw.get("ingredients")
