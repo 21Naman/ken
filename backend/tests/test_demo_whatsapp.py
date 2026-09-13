@@ -52,6 +52,7 @@ def test_demo_page_loads(monkeypatch):
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
     assert "WhatsApp Demo" in resp.text
+    assert "inventory-live" in resp.text
 
 
 def test_demo_send_feedback_saves_and_replies(monkeypatch):
@@ -89,3 +90,23 @@ def test_demo_send_rejects_empty(monkeypatch):
     finally:
         app.dependency_overrides.clear()
     assert resp.status_code == 422
+
+
+def test_demo_inventory_returns_lots(monkeypatch):
+    from app.models import InventoryLot
+
+    client, engine = make_client(monkeypatch, FakeProvider())
+    with Session(engine) as session:
+        session.add(
+            InventoryLot(household_id=1, ingredient="milk", quantity=2, unit="L")
+        )
+        session.commit()
+    try:
+        resp = client.get("/demo/whatsapp/inventory")
+    finally:
+        app.dependency_overrides.clear()
+    assert resp.status_code == 200
+    items = resp.json()["inventory"]
+    assert {"ingredient": "milk", "quantity": 2, "unit": "L"} == {
+        k: items[0][k] for k in ("ingredient", "quantity", "unit")
+    }
