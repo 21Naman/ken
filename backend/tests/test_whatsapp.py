@@ -56,6 +56,20 @@ def test_verify_success(monkeypatch):
     assert resp.text == "12345"
 
 
+def test_verify_success_trailing_slash(monkeypatch):
+    client = _client_with_whatsapp(monkeypatch)
+    resp = client.get(
+        "/webhooks/whatsapp/",
+        params={
+            "hub.mode": "subscribe",
+            "hub.verify_token": "test-verify",
+            "hub.challenge": "99",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.text == "99"
+
+
 def test_verify_forbidden(monkeypatch):
     client = _client_with_whatsapp(monkeypatch)
     resp = client.get(
@@ -69,12 +83,12 @@ def test_verify_forbidden(monkeypatch):
     assert resp.status_code == 403
 
 
-def test_post_text_calls_agent_and_sender(monkeypatch):
+def test_post_text_processes_and_sends(monkeypatch):
     client = _client_with_whatsapp(monkeypatch)
     calls = {}
 
-    def fake_agent(text, wa_id):
-        calls["agent"] = (text, wa_id)
+    def fake_process(text, wa_id):
+        calls["process"] = (text, wa_id)
         return "hi there"
 
     sent = []
@@ -82,20 +96,20 @@ def test_post_text_calls_agent_and_sender(monkeypatch):
     def fake_send(to, body):
         sent.append((to, body))
 
-    monkeypatch.setattr("app.api.whatsapp_routes.run_whatsapp_agent", fake_agent)
+    monkeypatch.setattr("app.api.whatsapp_routes.process_whatsapp_message", fake_process)
     monkeypatch.setattr("app.api.whatsapp_routes.send_whatsapp_message", fake_send)
 
     resp = client.post("/webhooks/whatsapp", json=_payload())
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
-    assert calls["agent"] == ("hello", "919999999999")
+    assert calls["process"] == ("hello", "919999999999")
     assert sent == [("919999999999", "hi there")]
 
 
 def test_post_duplicate_ignored(monkeypatch):
     client = _client_with_whatsapp(monkeypatch)
     monkeypatch.setattr(
-        "app.api.whatsapp_routes.run_whatsapp_agent", lambda text, wa_id: "reply"
+        "app.api.whatsapp_routes.process_whatsapp_message", lambda text, wa_id: "reply"
     )
     sent = []
     monkeypatch.setattr(
@@ -112,7 +126,7 @@ def test_post_status_update_ignored(monkeypatch):
     client = _client_with_whatsapp(monkeypatch)
     called = []
     monkeypatch.setattr(
-        "app.api.whatsapp_routes.run_whatsapp_agent",
+        "app.api.whatsapp_routes.process_whatsapp_message",
         lambda text, wa_id: called.append((text, wa_id)) or "x",
     )
     payload = {

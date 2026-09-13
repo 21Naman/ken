@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
-from app.domain.whatsapp_agent import run_whatsapp_agent
+from app.domain.whatsapp_memory import process_whatsapp_message
 from app.providers.whatsapp import send_whatsapp_message
 from app.settings import get_settings
 
@@ -75,7 +75,7 @@ def _handle_message(message: dict[str, Any]) -> None:
         return
 
     try:
-        reply = run_whatsapp_agent(text, wa_id)
+        reply = process_whatsapp_message(text, wa_id)
         send_whatsapp_message(wa_id, reply)
     except Exception:  # noqa: BLE001 - Meta expects 200; log and swallow
         logger.exception("whatsapp: agent or send failed for %s", wa_id)
