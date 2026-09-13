@@ -162,14 +162,21 @@ def health(settings: Settings = Depends(get_settings)) -> HealthResponse:
 @router.post("/demo/reset", response_model=DemoResetResponse)
 def demo_reset(scenario: str = "default", session: Session = Depends(get_session)) -> DemoResetResponse:
     try:
-        return DemoResetResponse(status="reset", **reset_demo_data(session, scenario))
+        data = reset_demo_data(session, scenario)
+        return DemoResetResponse(
+            status="reset",
+            scenario=str(data["scenario"]),
+            recipes=int(data["recipes"]),
+            store_items=int(data["store_items"]),
+            household_id=int(data["household_id"]),
+        )
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
 
 @router.get("/households")
 def list_households(session: Session = Depends(get_session)) -> list[Household]:
-    return list(session.exec(select(Household).order_by(Household.id)))
+    return list(session.exec(select(Household)).all())
 
 
 @router.post("/households", status_code=status.HTTP_201_CREATED)
@@ -329,16 +336,17 @@ def discover_dishes(household_id: int, settings: Settings = Depends(get_settings
     for raw in proposed[:3]:
         if not isinstance(raw, dict) or not isinstance(raw.get("name"), str) or not raw["name"].strip():
             continue
-        ingredients = raw.get("ingredients") if isinstance(raw.get("ingredients"), list) else []
+        raw_ingredients = raw.get("ingredients")
         clean_ingredients = []
-        for item in ingredients:
-            if not isinstance(item, dict):
-                continue
-            ingredient_name = str(item.get("name", "")).strip()
-            quantity = _number_or_none(item.get("quantity", 0))
-            if not ingredient_name or quantity is None or quantity <= 0:
-                continue
-            clean_ingredients.append({"name": ingredient_name, "quantity": quantity, "unit": str(item.get("unit", "item")).strip() or "item"})
+        if isinstance(raw_ingredients, list):
+            for item in raw_ingredients:
+                if not isinstance(item, dict):
+                    continue
+                ingredient_name = str(item.get("name", "")).strip()
+                quantity = _number_or_none(item.get("quantity", 0))
+                if not ingredient_name or quantity is None or quantity <= 0:
+                    continue
+                clean_ingredients.append({"name": ingredient_name, "quantity": quantity, "unit": str(item.get("unit", "item")).strip() or "item"})
         if not clean_ingredients:
             continue
         name = raw["name"].strip()
@@ -372,6 +380,7 @@ def request_discovery_purchase_approval(household_id: int, payload: DiscoveryApp
     procurement = assessment["procurement"]
     unknown_price = any(item["price_inr"] is None for item in procurement["items"])
     loop = _create(session, MealLoopRecord, household_id, {"trigger_type": "discovered_dish", "context_note": f"{payload.name}: purchase missing ingredients", "status": "awaiting_approval"})
+    assert loop.id is not None
     approval = _create(session, ApprovalRequest, household_id, {"meal_loop_id": loop.id, "tier": "red" if unknown_price else "yellow", "action": f"buy missing ingredients for {payload.name}", "amount_inr": procurement["estimated_cost_inr"], "reason": procurement["reason"]})
     session.add(AuditEvent(household_id=household_id, meal_loop_id=loop.id, event="approval_requested", detail=f"{payload.name}: {len(gaps)} missing ingredients"))
     session.commit()
@@ -468,6 +477,7 @@ def create_plan(household_id: int, payload: PlanRequest, session: Session = Depe
 @router.post("/households/{household_id}/loops", status_code=201)
 def start_loop(household_id: int, payload: LoopStart, session: Session = Depends(get_session)) -> dict[str, Any]:
     loop = _create(session, MealLoopRecord, household_id, {"trigger_type": payload.trigger_type, "context_note": payload.context_note, "status": "triggered"})
+    assert loop.id is not None
     session.add(AuditEvent(household_id=household_id, meal_loop_id=loop.id, event="triggered", detail=payload.trigger_type)); session.commit()
     return {"id": loop.id, "household_id": loop.household_id, "trigger_type": loop.trigger_type, "status": loop.status}
 
@@ -506,7 +516,9 @@ def approvals(household_id: int, session: Session = Depends(get_session)) -> lis
 def decide_approval(household_id: int, approval_id: int, payload: ApprovalDecision, session: Session = Depends(get_session)) -> ApprovalRequest:
     approval = _scoped(session, ApprovalRequest, household_id, approval_id)
     if approval.status != "pending": raise HTTPException(409, "Approval is already decided")
+    assert approval.meal_loop_id is not None
     loop = _scoped(session, MealLoopRecord, household_id, approval.meal_loop_id)
+    assert loop.id is not None
     approval.status = "approved" if payload.approved else "rejected"
     loop.status = "approved" if payload.approved else "planned"
     session.add(approval); session.add(loop); session.add(AuditEvent(household_id=household_id, meal_loop_id=loop.id, event=approval.status, detail=approval.action)); session.commit(); session.refresh(approval)
