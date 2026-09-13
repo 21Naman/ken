@@ -14,6 +14,7 @@ enable_local_only_defaults()
 
 from app.api.routes import router
 from app.api.whatsapp_routes import router as whatsapp_router
+from app.api.demo_routes import router as demo_router
 from app.database import initialize_database
 from app.scheduler import start_scheduler, stop_scheduler
 
@@ -36,3 +37,4 @@ app.add_middleware(
 )
 app.include_router(router)
 app.include_router(whatsapp_router)
+app.include_router(demo_router)
