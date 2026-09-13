@@ -6,7 +6,8 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from app.database import get_session
-from app.domain.whatsapp_memory import _default_provider, process_text
+from app.domain import whatsapp_memory
+from app.domain.whatsapp_memory import process_text
 from app.models import InventoryLot
 
 router = APIRouter(prefix="/demo/whatsapp", tags=["demo"])
@@ -141,7 +142,7 @@ def demo_send(
     text = payload.text.strip()
     if not text:
         raise HTTPException(status_code=422, detail="Message text is required")
-    reply = process_text(session, _default_provider(), text, DEMO_WA_ID)
+    reply = process_text(session, whatsapp_memory._default_provider(), text, DEMO_WA_ID)
     return {"reply": reply, "from": DEMO_WA_ID}
 
 
