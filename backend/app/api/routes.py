@@ -19,9 +19,10 @@ from sqlmodel import SQLModel, Session, select
 from app.database import get_session
 from app.models import (
     ApprovalRequest, AuditEvent, Budget, CookProfile, DemoStoreItem, Dish, DishHistory, Household, HouseholdMember, InventoryLot, LocalTask,
-    Leftover, MealLoopRecord, PreferenceSignal, GoogleCalendarConnection, GoogleOAuthState,
+    Leftover, MealLoopRecord, PreferenceSignal, GoogleCalendarConnection, GoogleOAuthState, ZeptoConnection, ZeptoOAuthState,
 )
 from app.providers.google_calendar import GoogleCalendarError, GoogleCalendarProvider
+from app.providers.zepto_mcp import ZeptoMCPError, ZeptoMCPProvider
 from app.providers.ollama import OllamaProvider
 from app.providers.whisper import WhisperProvider
 from app.providers.vision import VisionProvider
@@ -29,7 +30,7 @@ from app.repositories import Repository
 from app.schemas import (
     BudgetWrite, CookProfileWrite, DishCreate, DiscoveryApprovalRequest, HistoryCreate, HouseholdCreate,
     HouseholdUpdate, InventoryCreate, InventoryUpdate, LeftoverCreate, MealLoopCreate,
-    LoopStart, MemberCreate, PlanRequest, PreferenceCreate, TransitionRequest, ApprovalDecision, ProposedAction, OutcomeCapture, FeedbackText, CaptureConfirm, CaptureCandidate, CapturePreview, CalendarSelection, CookBriefRequest,
+    LoopStart, MemberCreate, PlanRequest, PreferenceCreate, TransitionRequest, ApprovalDecision, ProposedAction, OutcomeCapture, FeedbackText, CaptureConfirm, CaptureCandidate, CapturePreview, CalendarSelection, CookBriefRequest, ZeptoCartRequest, ZeptoSyncRequest,
 )
 from app.seed import reset_demo_data
 from app.services import expiry_status
@@ -116,6 +117,18 @@ def _calendar_view(connection: GoogleCalendarConnection | None) -> dict[str, Any
     if connection is None:
         return {"connected": False, "email": None, "calendar_id": None, "calendar_name": None}
     return {"connected": True, "email": connection.google_email, "calendar_id": connection.calendar_id, "calendar_name": connection.calendar_name}
+
+
+def _zepto_connection(session: Session, household_id: int) -> ZeptoConnection:
+    _household(session, household_id)
+    connection = session.exec(select(ZeptoConnection).where(ZeptoConnection.household_id == household_id)).first()
+    if connection is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Connect your Zepto account before adding items to its cart.")
+    return connection
+
+
+def _zepto_view(connection: ZeptoConnection | None) -> dict[str, Any]:
+    return {"connected": connection is not None, "phone_number": connection.phone_number if connection else None}
 
 
 def _inventory_view(item: InventoryLot) -> dict[str, Any]:
@@ -209,6 +222,48 @@ def create_household(payload: HouseholdCreate, session: Session = Depends(get_se
     return Repository(Household, session).create(Household(**payload.model_dump()))
 
 
+@router.get("/households/{household_id}/zepto/status")
+def zepto_status(household_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+    _household(session, household_id)
+    connection = session.exec(select(ZeptoConnection).where(ZeptoConnection.household_id == household_id)).first()
+    return _zepto_view(connection)
+
+
+@router.post("/households/{household_id}/zepto/connect")
+def zepto_connect(household_id: int, settings: Settings = Depends(get_settings), session: Session = Depends(get_session)) -> dict[str, str]:
+    _household(session, household_id)
+    state, verifier = uuid4().hex, ZeptoMCPProvider.pkce_verifier()
+    session.add(ZeptoOAuthState(state=state, household_id=household_id, code_verifier=verifier, expires_at=datetime.now(UTC) + timedelta(minutes=10)))
+    session.commit()
+    try:
+        return {"authorization_url": ZeptoMCPProvider(settings).get_auth_url(household_id, settings.zepto_redirect_uri, state, verifier)}
+    except ZeptoMCPError as exc:
+        state_row = session.get(ZeptoOAuthState, state)
+        if state_row: session.delete(state_row); session.commit()
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@router.get("/zepto/callback")
+def zepto_callback(code: str | None = None, state: str | None = None, error: str | None = None, settings: Settings = Depends(get_settings), session: Session = Depends(get_session)) -> RedirectResponse:
+    query: dict[str, str] = {"zepto_connection": "error"}
+    state_row = session.get(ZeptoOAuthState, state) if state else None
+    if state_row is None or _utc(state_row.expires_at) < datetime.now(UTC) or error or not code:
+        if state_row: session.delete(state_row); session.commit()
+        query["zepto_error"] = "Zepto connection was cancelled or expired."
+        return RedirectResponse(f"{settings.frontend_url}/?{urlencode(query)}")
+    try:
+        encrypted_token, phone = ZeptoMCPProvider(settings).exchange_code(code, state_row.code_verifier)
+        connection = session.exec(select(ZeptoConnection).where(ZeptoConnection.household_id == state_row.household_id)).first()
+        if connection is None:
+            session.add(ZeptoConnection(household_id=state_row.household_id, encrypted_access_token=encrypted_token, phone_number=phone))
+        else:
+            connection.encrypted_access_token = encrypted_token; connection.phone_number = phone; connection.updated_at = datetime.now(UTC); session.add(connection)
+        session.delete(state_row); session.commit(); query["zepto_connection"] = "success"
+    except ZeptoMCPError as exc:
+        session.delete(state_row); session.commit(); query["zepto_error"] = str(exc)
+    return RedirectResponse(f"{settings.frontend_url}/?{urlencode(query)}")
+
+
 @router.get("/households/{household_id}")
 def get_household(household_id: int, session: Session = Depends(get_session)) -> Household:
     return _household(session, household_id)
@@ -223,7 +278,7 @@ def update_household(household_id: int, payload: HouseholdUpdate, session: Sessi
 def delete_household(household_id: int, session: Session = Depends(get_session)) -> None:
     # Phase 2 keeps deletion explicit and removes all owned memory records first.
     _household(session, household_id)
-    for model in (GoogleCalendarConnection, GoogleOAuthState, HouseholdMember, CookProfile, InventoryLot, Leftover, Dish, DishHistory, Budget, PreferenceSignal, MealLoopRecord):
+    for model in (GoogleCalendarConnection, GoogleOAuthState, ZeptoConnection, ZeptoOAuthState, HouseholdMember, CookProfile, InventoryLot, Leftover, Dish, DishHistory, Budget, PreferenceSignal, MealLoopRecord):
         for item in _list(session, model, household_id):
             session.delete(item)
     session.delete(_household(session, household_id))
@@ -556,6 +611,51 @@ def request_discovery_purchase_approval(household_id: int, payload: DiscoveryApp
     session.add(AuditEvent(household_id=household_id, meal_loop_id=loop.id, event="approval_requested", detail=f"{payload.name}: {len(gaps)} missing ingredients"))
     session.commit()
     return {"status": "approval_requested", "approval_id": approval.id, **assessment}
+
+
+@router.post("/households/{household_id}/zepto/cart")
+def zepto_cart(household_id: int, payload: ZeptoCartRequest, settings: Settings = Depends(get_settings), session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Search live Zepto inventory, then add the selected matches to the user's cart."""
+    connection = _zepto_connection(session, household_id)
+    provider = ZeptoMCPProvider(settings)
+    items_added: list[dict[str, Any]] = []
+    try:
+        for gap in payload.missing_ingredients:
+            ingredient = str(gap.get("ingredient", "")).strip()
+            if not ingredient: continue
+            matches = provider.search_product(connection.encrypted_access_token, ingredient)
+            product = next((item for item in matches if item.get("in_stock", True)), None)
+            if product is None: continue
+            product_id = product.get("id", product.get("product_id", product.get("sku")))
+            if not product_id: continue
+            items_added.append({"ingredient": ingredient, "matched_product": str(product.get("name", product.get("title", ingredient))), "product_id": str(product_id), "price_inr": float(product.get("price_inr", product.get("price", 0)) or 0), "quantity": 1, "unit": str(gap.get("unit", "item")), "shortfall": float(gap.get("shortfall", 1) or 1)})
+        if not items_added:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "No in-stock Zepto matches were found for these missing ingredients.")
+        provider.add_items_to_cart(connection.encrypted_access_token, [{"product_id": item["product_id"], "quantity": item["quantity"]} for item in items_added])
+        cart = provider.get_cart(connection.encrypted_access_token)
+    except ZeptoMCPError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    total = float(cart.get("total_amount_inr", cart.get("total", sum(item["price_inr"] * item["quantity"] for item in items_added))) or 0)
+    loop = _create(session, MealLoopRecord, household_id, {"trigger_type": "zepto_cart", "context_note": payload.dish_name, "status": "recorded"})
+    session.add(AuditEvent(household_id=household_id, meal_loop_id=loop.id, event="zepto_cart_created", detail=f"{payload.dish_name}: {len(items_added)} Zepto items added")); session.commit()
+    # Cart creation must never place an order. Zepto's checkout/payment page is
+    # where the user explicitly chooses UPI/COD and confirms the real order.
+    return {"status": "cart_updated", "store": "Zepto (10 min delivery)", "items_added": items_added, "total_amount_inr": total, "payment_url": cart.get("payment_url", cart.get("upi_url")), "checkout_url": cart.get("checkout_url", "https://www.zeptonow.com/cart")}
+
+
+@router.post("/households/{household_id}/zepto/sync-inventory", status_code=status.HTTP_201_CREATED)
+def zepto_sync_inventory(household_id: int, payload: ZeptoSyncRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Only records delivery after the user explicitly confirms it has arrived."""
+    _household(session, household_id)
+    shelf_life = {"coriander": 3, "tomato": 7, "carrot": 10, "eggs": 21, "egg": 21, "milk": 5, "cheese": 14, "yeast": 180}
+    created: list[dict[str, Any]] = []
+    for item in payload.items_added:
+        ingredient = str(item.get("ingredient", "")).strip()
+        if not ingredient: continue
+        days = shelf_life.get(ingredient.casefold(), 7)
+        lot = _create(session, InventoryLot, household_id, _inventory_values({"ingredient": ingredient, "quantity": float(item.get("shortfall", item.get("quantity", 1)) or 1), "unit": str(item.get("unit", "item")), "purchased_on": date.today(), "expiry_date": date.today() + timedelta(days=days), "freshness": "fresh", "storage_location": "fridge", "confirmed": True}))
+        created.append(_inventory_view(lot))
+    return {"status": "inventory_synced", "items": created}
 
 
 @router.get("/households/{household_id}/history")

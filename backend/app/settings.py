@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     google_client_secret: str | None = None
     google_redirect_uri: str = "http://127.0.0.1:8000/api/google-calendar/callback"
     google_token_encryption_key: str | None = None
+    zepto_mcp_url: str = "https://mcp.zepto.co.in/mcp"
+    zepto_client_id: str | None = None
+    zepto_client_secret: str | None = None
+    zepto_oauth_authorization_url: str | None = None
+    zepto_oauth_token_url: str | None = None
+    zepto_redirect_uri: str = "http://127.0.0.1:8000/api/zepto/callback"
+    zepto_token_encryption_key: str | None = None
+    zepto_mock_enabled: bool = False
     frontend_url: str = "http://localhost:5173"
 
     @property

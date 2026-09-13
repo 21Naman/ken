@@ -86,6 +86,15 @@ class DiscoveryApprovalRequest(APIModel):
     servings: int = Field(default=2, ge=1)
 
 
+class ZeptoCartRequest(APIModel):
+    dish_name: str = Field(min_length=1, max_length=120)
+    missing_ingredients: list[dict[str, Any]] = Field(min_length=1)
+
+
+class ZeptoSyncRequest(APIModel):
+    items_added: list[dict[str, Any]] = Field(min_length=1)
+
+
 class HistoryCreate(APIModel):
     dish_id: int | None = None
     dish_name: str = Field(min_length=1, max_length=120)

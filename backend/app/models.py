@@ -76,6 +76,27 @@ class GoogleOAuthState(SQLModel, table=True):
     expires_at: datetime
 
 
+class ZeptoConnection(SQLModel, table=True):
+    """One encrypted Zepto OAuth token per household."""
+    __tablename__ = "zepto_connections"
+    __table_args__ = (UniqueConstraint("household_id", name="uq_zepto_household"),)
+    id: int | None = Field(default=None, primary_key=True)
+    household_id: int = Field(foreign_key="households.id", index=True)
+    encrypted_access_token: str
+    phone_number: str | None = Field(default=None, max_length=32)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ZeptoOAuthState(SQLModel, table=True):
+    """Short-lived PKCE state for a household's Zepto connection."""
+    __tablename__ = "zepto_oauth_states"
+    state: str = Field(primary_key=True, max_length=128)
+    household_id: int = Field(foreign_key="households.id", index=True)
+    code_verifier: str = Field(max_length=256)
+    expires_at: datetime
+
+
 class CookProfile(SQLModel, table=True):
     __tablename__ = "cook_profiles"
     __table_args__ = (UniqueConstraint("household_id", name="uq_cook_profile_household"),)

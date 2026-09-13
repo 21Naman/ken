@@ -5,6 +5,8 @@ export interface Member { id: number; name: string; language: string; dietary_pr
 export interface GoogleCalendarConnection { connected: boolean; email: string | null; calendar_id: string | null; calendar_name: string | null; }
 export interface GoogleCalendarOption { id: string; name: string; primary: boolean; access_role: string; }
 export interface GoogleCalendarEvent { title: string; start: string; end: string; }
+export interface ZeptoStatus { connected: boolean; phone_number: string | null; }
+export interface ZeptoCart { status: string; store: string; items_added: Array<{ ingredient: string; matched_product: string; product_id: string; price_inr: number; quantity: number; unit: string; shortfall: number }>; total_amount_inr: number; payment_url: string | null; checkout_url: string; }
 export interface CookBrief { plan_date: string; summary: string; actions: Array<{ time: string; meal: string; action: string; members: string[]; reason: string }>; questions: string[]; calendar_unavailable_for: string[]; availability_source: string; events_read: Record<string, Array<{ title: string; start: string; end: string }>>; }
 export interface CookProfile { id: number; name: string; language: string; skill_level: string; available_hours: string[]; confident_dishes: string[]; }
 export interface Budget { id: number; monthly_limit: number; spent_amount: number; planned_amount: number; category_allocations: Record<string, number>; }

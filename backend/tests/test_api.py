@@ -7,7 +7,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.database import create_database_engine, get_session, initialize_database
 from app.main import app
-from app.models import DemoRecipe, DemoStoreItem, Household, InventoryLot
+from app.models import DemoRecipe, DemoStoreItem, Household, InventoryLot, ZeptoConnection
 from app.providers.ollama import OllamaHealth, OllamaProvider
 from app.providers.whisper import WhisperProvider
 from app.providers.vision import VisionProvider
@@ -494,6 +494,25 @@ def test_malformed_ollama_quantity_is_ignored_instead_of_causing_500(monkeypatch
         response = client.post(f"/api/households/{household_id}/discover-dishes")
     assert response.status_code == 200
     assert response.json()["dishes"][0]["ingredients"] == [{"name": "rice", "quantity": 1.0, "unit": "cup"}]
+    app.dependency_overrides.clear()
+
+
+def test_zepto_status_cart_audit_and_inventory_sync_use_local_provider_contract(monkeypatch):
+    client, engine = make_client(monkeypatch, OllamaHealth("available", "qwen3:4b"))
+    monkeypatch.setattr("app.api.routes.ZeptoMCPProvider.search_product", lambda *_args: [{"id": "carrot-500", "name": "Fresh Carrots 500g", "price_inr": 28, "in_stock": True}])
+    monkeypatch.setattr("app.api.routes.ZeptoMCPProvider.add_items_to_cart", lambda *_args: {})
+    monkeypatch.setattr("app.api.routes.ZeptoMCPProvider.get_cart", lambda *_args: {"total_amount_inr": 28, "checkout_url": "https://www.zeptonow.com/cart"})
+    with client:
+        household_id = client.post("/api/demo/reset").json()["household_id"]
+        assert client.get(f"/api/households/{household_id}/zepto/status").json() == {"connected": False, "phone_number": None}
+        with Session(engine) as session:
+            session.add(ZeptoConnection(household_id=household_id, encrypted_access_token="test-token", phone_number="XXXXXX1234")); session.commit()
+        cart = client.post(f"/api/households/{household_id}/zepto/cart", json={"dish_name": "Vegetable Khichdi", "missing_ingredients": [{"ingredient": "carrot", "shortfall": 2, "unit": "piece"}]}).json()
+        synced = client.post(f"/api/households/{household_id}/zepto/sync-inventory", json={"items_added": cart["items_added"]}).json()
+        audit = client.get(f"/api/households/{household_id}/audit").json()
+    assert cart["status"] == "cart_updated" and cart["items_added"][0]["matched_product"] == "Fresh Carrots 500g"
+    assert synced["items"][0]["ingredient"] == "carrot"
+    assert audit[-1]["event"] == "zepto_cart_created"
     app.dependency_overrides.clear()
 
 
