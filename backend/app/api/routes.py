@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, TypeVar
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -16,14 +16,14 @@ from app.providers.whisper import WhisperProvider
 from app.providers.vision import VisionProvider
 from app.repositories import Repository
 from app.schemas import (
-    BudgetWrite, CookProfileWrite, DishCreate, HistoryCreate, HouseholdCreate,
+    BudgetWrite, CookProfileWrite, DishCreate, DiscoveryApprovalRequest, HistoryCreate, HouseholdCreate,
     HouseholdUpdate, InventoryCreate, InventoryUpdate, LeftoverCreate, MealLoopCreate,
     LoopStart, MemberCreate, PlanRequest, PreferenceCreate, TransitionRequest, ApprovalDecision, ProposedAction, OutcomeCapture, FeedbackText, CaptureConfirm, CaptureCandidate, CapturePreview,
 )
 from app.seed import reset_demo_data
 from app.services import expiry_status
 from app.settings import Settings, get_settings
-from app.domain.planner import PlanInput, plan
+from app.domain.planner import PlanInput, assess_discovered_dish, plan
 from app.domain.workflow import autonomy_tier, inventory_is_fresh, transition
 from app.scheduler import add_daily_trigger, scheduled_trigger, scheduler_status
 
@@ -95,6 +95,56 @@ def _delete(session: Session, model: type[T], household_id: int, item_id: int) -
 
 def _inventory_view(item: InventoryLot) -> dict[str, Any]:
     return {**item.model_dump(), "expiry_status": expiry_status(item.expiry_date)}
+
+
+def _inventory_values(values: dict[str, Any]) -> dict[str, Any]:
+    """Apply a user-selected freshness estimate only when no date was entered."""
+    freshness = str(values.get("freshness") or "fresh").strip().lower()
+    aliases = {"normal": "fresh", "expires_today": "use_immediately"}
+    freshness = aliases.get(freshness, freshness)
+    if freshness not in {"fresh", "expiring_soon", "use_immediately"}:
+        freshness = "fresh"
+    values = {**values, "freshness": freshness}
+    if values.get("expiry_date") is None:
+        days = {"fresh": 7, "expiring_soon": 2, "use_immediately": 0}[freshness]
+        values["expiry_date"] = date.today() + timedelta(days=days)
+    return values
+
+
+def _number_or_none(value: Any) -> float | None:
+    """Never let an imperfect local-model field crash an API request."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _inventory_recipe_hints(inventory: list[InventoryLot]) -> list[dict[str, Any]]:
+    """Fast, local recipe recognition for strong pantry combinations.
+
+    This runs before the optional LLM, so the common pizza set works even when
+    Qwen is slow or produces malformed JSON.
+    """
+    names = {item.ingredient.strip().casefold() for item in inventory}
+    has_flour = any(x in names for x in ("flour", "all purpose flour", "all-purpose flour", "maida", "atta", "wheat flour"))
+    has_sauce = any(x in names for x in ("tomato sauce", "pizza sauce", "marinara", "tomato puree", "tomato paste"))
+    has_cheese = any(x in names for x in ("cheese", "mozzarella", "mozzarella cheese", "cheddar", "paneer"))
+    has_oregano = any(x in names for x in ("oregano", "pizza seasoning", "mixed herbs", "italian seasoning"))
+    if has_flour and has_sauce and has_cheese and has_oregano:
+        return [{
+            "name": "Homestyle Margherita Pizza",
+            "ingredients": [
+                {"name": "flour", "quantity": 300, "unit": "g"},
+                {"name": "tomato sauce", "quantity": 150, "unit": "ml"},
+                {"name": "cheese", "quantity": 200, "unit": "g"},
+                {"name": "oregano", "quantity": 1, "unit": "tsp"},
+                {"name": "yeast", "quantity": 1, "unit": "packet"},
+            ],
+            "prep_minutes": 35, "servings": 2, "nutrition_notes": ["vegetarian"],
+            "cook_skill_required": "beginner",
+            "rationale": "Your flour, tomato sauce, cheese, and oregano are a direct match for pizza; yeast is the only core missing ingredient.",
+        }]
+    return []
 
 
 def _leftover_view(item: Leftover) -> dict[str, Any]:
@@ -190,12 +240,12 @@ def list_inventory(household_id: int, session: Session = Depends(get_session)) -
 
 @router.post("/households/{household_id}/inventory", status_code=status.HTTP_201_CREATED)
 def create_inventory(household_id: int, payload: InventoryCreate, session: Session = Depends(get_session)) -> dict[str, Any]:
-    return _inventory_view(_create(session, InventoryLot, household_id, payload.model_dump()))
+    return _inventory_view(_create(session, InventoryLot, household_id, _inventory_values(payload.model_dump())))
 
 
 @router.put("/households/{household_id}/inventory/{item_id}")
 def update_inventory(household_id: int, item_id: int, payload: InventoryUpdate, session: Session = Depends(get_session)) -> dict[str, Any]:
-    values = {**payload.model_dump(), "updated_at": datetime.now(UTC)}
+    values = {**_inventory_values(payload.model_dump()), "updated_at": datetime.now(UTC)}
     return _inventory_view(_update(session, InventoryLot, household_id, item_id, values))
 
 
@@ -242,6 +292,90 @@ def update_dish(household_id: int, item_id: int, payload: DishCreate, session: S
 @router.delete("/households/{household_id}/dishes/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_dish(household_id: int, item_id: int, session: Session = Depends(get_session)) -> None:
     _delete(session, Dish, household_id, item_id)
+
+
+@router.post("/households/{household_id}/discover-dishes")
+def discover_dishes(household_id: int, settings: Settings = Depends(get_settings), session: Session = Depends(get_session)) -> dict[str, list[dict[str, Any]]]:
+    """Ask the local model for cookable ideas; saving an idea remains explicit."""
+    _household(session, household_id)
+    inventory = [item for item in _list(session, InventoryLot, household_id) if item.quantity > 0]
+    if not inventory:
+        return {"dishes": []}
+    ingredient_list = [{"name": item.ingredient, "quantity": item.quantity, "unit": item.unit} for item in inventory]
+    prompt = (
+        "Return JSON only in this exact shape: {\"dishes\":[{\"name\":string,\"ingredients\":[{\"name\":string,\"quantity\":number,\"unit\":string}],"
+        "\"prep_minutes\":number,\"servings\":number,\"nutrition_notes\":[string],\"cook_skill_required\":string,\"rationale\":string}]}. "
+        "Suggest 1 to 3 feasible, simple dishes that can be made using primarily the available household ingredients. "
+        "IMPORTANT: For each dish, list ALL core ingredients required to prepare it properly (including common staples or ingredients that might be missing from inventory like yeast, eggs, spices, or toppings) so the system can calculate shopping gaps. "
+        "Do not invent bizarre combinations just to fit only available ingredients (e.g. if flour, cheese, and tomato sauce are present, suggest Pizza with any missing items like yeast or toppings included). "
+        f"Available inventory: {ingredient_list}"
+    )
+    proposed = _inventory_recipe_hints(inventory)
+    if not proposed:
+        try:
+            # Allow full generous discovery timeout for local LLM inference
+            result = OllamaProvider(settings.ollama_base_url, settings.ollama_model, settings.discovery_request_timeout_seconds).generate_structured(prompt)
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(503, f"Dish discovery is unavailable; use the recipe book manually. {exc}") from exc
+        proposed = result.get("dishes")
+    if not isinstance(proposed, list):
+        raise HTTPException(503, "Dish discovery returned an invalid recipe list")
+    existing = {dish.name.strip().casefold(): dish for dish in _list(session, Dish, household_id)}
+    inventory_data = [item.model_dump(mode="json") for item in inventory]
+    budget = session.exec(select(Budget).where(Budget.household_id == household_id)).first()
+    budget_remaining = max(0, (budget.monthly_limit - budget.spent_amount - budget.planned_amount) if budget else 0)
+    stores = [item.model_dump() for item in session.exec(select(DemoStoreItem))]
+    dishes: list[dict[str, Any]] = []
+    for raw in proposed[:3]:
+        if not isinstance(raw, dict) or not isinstance(raw.get("name"), str) or not raw["name"].strip():
+            continue
+        ingredients = raw.get("ingredients") if isinstance(raw.get("ingredients"), list) else []
+        clean_ingredients = []
+        for item in ingredients:
+            if not isinstance(item, dict):
+                continue
+            ingredient_name = str(item.get("name", "")).strip()
+            quantity = _number_or_none(item.get("quantity", 0))
+            if not ingredient_name or quantity is None or quantity <= 0:
+                continue
+            clean_ingredients.append({"name": ingredient_name, "quantity": quantity, "unit": str(item.get("unit", "item")).strip() or "item"})
+        if not clean_ingredients:
+            continue
+        name = raw["name"].strip()
+        known = existing.get(name.casefold())
+        prep_minutes = _number_or_none(raw.get("prep_minutes", 0))
+        servings = _number_or_none(raw.get("servings", 1))
+        dish = {
+            "name": name, "ingredients": clean_ingredients,
+            "prep_minutes": max(0, int(prep_minutes or 0)), "servings": max(1, int(servings or 1)),
+            "nutrition_notes": [str(note) for note in raw.get("nutrition_notes", []) if isinstance(note, str)],
+            "cook_skill_required": str(raw.get("cook_skill_required", "beginner")),
+            "rationale": str(raw.get("rationale", "Uses your current inventory.")),
+            "is_new": known is None, "dish_id": known.id if known else None,
+        }
+        dishes.append({**dish, **assess_discovered_dish(dish, dish["servings"], inventory_data, stores, budget_remaining, date.today())})
+    return {"dishes": dishes}
+
+
+@router.post("/households/{household_id}/discover-dishes/approval", status_code=status.HTTP_201_CREATED)
+def request_discovery_purchase_approval(household_id: int, payload: DiscoveryApprovalRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Create an explicit approval request for a discovered dish's missing ingredients."""
+    _household(session, household_id)
+    inventory = [item.model_dump(mode="json") for item in _list(session, InventoryLot, household_id) if item.quantity > 0]
+    budget = session.exec(select(Budget).where(Budget.household_id == household_id)).first()
+    budget_remaining = max(0, (budget.monthly_limit - budget.spent_amount - budget.planned_amount) if budget else 0)
+    stores = [item.model_dump() for item in session.exec(select(DemoStoreItem))]
+    assessment = assess_discovered_dish(payload.model_dump(), payload.servings, inventory, stores, budget_remaining, date.today())
+    gaps = assessment["missing_ingredients"]
+    if not gaps:
+        return {"status": "use_stock", "approval_id": None, **assessment}
+    procurement = assessment["procurement"]
+    unknown_price = any(item["price_inr"] is None for item in procurement["items"])
+    loop = _create(session, MealLoopRecord, household_id, {"trigger_type": "discovered_dish", "context_note": f"{payload.name}: purchase missing ingredients", "status": "awaiting_approval"})
+    approval = _create(session, ApprovalRequest, household_id, {"meal_loop_id": loop.id, "tier": "red" if unknown_price else "yellow", "action": f"buy missing ingredients for {payload.name}", "amount_inr": procurement["estimated_cost_inr"], "reason": procurement["reason"]})
+    session.add(AuditEvent(household_id=household_id, meal_loop_id=loop.id, event="approval_requested", detail=f"{payload.name}: {len(gaps)} missing ingredients"))
+    session.commit()
+    return {"status": "approval_requested", "approval_id": approval.id, **assessment}
 
 
 @router.get("/households/{household_id}/history")
@@ -444,7 +578,7 @@ def weekly_reflection(household_id: int, session: Session = Depends(get_session)
 @router.post("/households/{household_id}/capture/confirm", status_code=201)
 def confirm_capture(household_id: int, payload: CaptureConfirm, session: Session = Depends(get_session)) -> dict[str, Any]:
     if not payload.confirmed: raise HTTPException(409, "Capture requires explicit confirmation")
-    return _inventory_view(_create(session, InventoryLot, household_id, payload.model_dump()))
+    return _inventory_view(_create(session, InventoryLot, household_id, _inventory_values(payload.model_dump())))
 
 
 def _capture_candidates(payload: dict[str, Any]) -> list[CaptureCandidate]:
@@ -460,6 +594,7 @@ def _capture_candidates(payload: dict[str, Any]) -> list[CaptureCandidate]:
             quantity=float(item.get("estimated_quantity", item.get("quantity", 0))),
             unit=str(item.get("unit", "item")).strip() or "item",
             expiry_date=item.get("expiry_date") or None,
+            freshness=str(item.get("freshness", "fresh")),
             storage_location=str(item.get("storage_hint", item.get("storage_location", "pantry"))),
             readability_confidence=float(item.get("readability_confidence", item.get("confidence", 0))),
         ))
@@ -502,7 +637,7 @@ async def preview_audio_capture(household_id: int, audio: UploadFile = File(...)
         return CapturePreview(source="audio", requires_confirmation=True, fallback=str(exc))
     try:
         parsed = OllamaProvider(settings.ollama_base_url, settings.ollama_model, settings.request_timeout_seconds).generate_structured(
-            'Return JSON only with an "items" array. Parse this English/Hindi/Hinglish inventory transcript into ingredient, estimated_quantity, unit, expiry_date, storage_hint, readability_confidence (0 to 1): ' + spoken["transcript"]
+            'Return JSON only with an "items" array. Parse this English/Hindi/Hinglish inventory transcript into ingredient, estimated_quantity, unit, expiry_date, freshness (fresh, expiring_soon, or use_immediately), storage_hint, readability_confidence (0 to 1): ' + spoken["transcript"]
         )
         candidates = _capture_candidates(parsed)
     except (httpx.HTTPError, ValueError) as exc:

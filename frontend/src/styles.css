@@ -27,3 +27,10 @@ li { border-top: 1px solid #edf1ec; padding: 10px 0; }
 .quiet { background: transparent; color: #1d6b45; margin-left: 8px; padding: 2px 5px; }
 .status { border-radius: 999px; font-size: .78rem; font-weight: 700; padding: 3px 7px; text-transform: capitalize; }
 .expired { background: #ffe1dd; color: #8b281c; }.expires_today, .expiring_soon { background: #fff1cb; color: #755500; }.fresh { background: #dff1df; color: #175e2d; }.unknown { background: #e8ebea; color: #536158; }
+/* Loading bar */
+.loading-bar { background: #dae4d8; border-radius: 999px; height: 4px; margin: 10px 0; overflow: hidden; width: 100%; }
+@keyframes loading-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+.loading-bar-fill { background: #1d6b45; border-radius: 999px; height: 100%; width: 40%; animation: loading-sweep 1.2s ease-in-out infinite; }
+.upload-status { color: #1d6b45; font-weight: 700; margin: 0; }
+button[disabled], button[aria-busy="true"] { background: #8fad9a; cursor: not-allowed; opacity: 0.75; }
+

@@ -22,7 +22,8 @@ class Settings(BaseSettings):
     vision_model: str = "qwen2.5vl:3b"
     vision_request_timeout_seconds: float = Field(default=60.0, gt=0)
     whisper_model: str = "base"
-    request_timeout_seconds: float = Field(default=10.0, gt=0)
+    request_timeout_seconds: float = Field(default=30.0, gt=0)
+    discovery_request_timeout_seconds: float = Field(default=90.0, gt=0)
 
     @property
     def database_path(self) -> Path | None:

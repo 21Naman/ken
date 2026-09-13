@@ -471,3 +471,39 @@ deployment integrations.
 **Final phase:** Phase 7 is the final phase specified by `docs/build_map.md`.
 The build-map implementation is complete; no Phase 8 or excluded-scope work was
 started.
+
+### Household Agent Feature Upgrade (complete, 2026-09-13)
+
+- Removed the dashboard demo scenario selector and reset action. The frontend no
+  longer calls the demo-reset API; household state is managed through the normal
+  SQLite-backed CRUD screens. The backend fixture endpoint remains for automated
+  backend tests only.
+- Added persistent inventory `freshness` across typed, image-review, and
+  voice-review capture. Freshness now estimates a missing expiry as 7 days
+  (`fresh`), 2 days (`expiring_soon`), or today (`use_immediately`), and the
+  local SQLite startup migration adds the new column without replacing existing
+  household data.
+- Added local Ollama dish discovery from active inventory, including structured
+  recipe responses, existing-family-recipe detection, and explicit save to the
+  Dish table. The Today screen can discover dishes and save new AI recipes; the
+  new Recipe Book page supports viewing, manually adding, and removing dishes.
+- Verification: backend suite passed **37 tests**; frontend unit suite passed
+  **6 tests**; frontend production build passed.
+
+### Discovery Gap and Approval Upgrade (complete, 2026-09-13)
+
+- Dish discovery now deterministically compares every AI-recipe ingredient with
+  active inventory, including kg/g, l/ml, and dozen/piece conversions. It shows
+  missing quantities, a local-only price estimate, and the procurement route.
+- The discovery prompt now requires complete core ingredient lists and explicitly
+  considers pizza/flatbread for flour, tomato sauce, cheese, and oregano. Common
+  missing pizza staples use local fallback estimates when no store fixture is
+  present.
+- A discovered dish with gaps can now create a persisted yellow/red approval
+  request before any purchase; it appears on the existing Approvals screen.
+- Live diagnosis: the local backend health endpoint was available, while its
+  discovery request returned `503` because the Qwen call exceeded the prior
+  10-second limit. Discovery now allows up to 60 seconds and surfaces the exact
+  backend error in the UI rather than masking it.
+- Verification: backend suite passed **38 tests**; frontend unit suite passed
+  **6 tests**; frontend production build passed.

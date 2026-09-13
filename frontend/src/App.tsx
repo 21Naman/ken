@@ -1,11 +1,9 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api } from "./api/client";
-import type { Approval, AuditEvent, Budget, CapturePreview, CookProfile, DishHistory, HealthResponse, Household, InventoryLot, Leftover, MealLoop, Member, PlanResponse, Preference } from "./api/contracts";
+import type { Approval, AuditEvent, Budget, CapturePreview, CookProfile, Dish, DiscoveredDish, DishHistory, HealthResponse, Household, InventoryLot, Leftover, MealLoop, Member, PlanResponse, Preference } from "./api/contracts";
 import "./styles.css";
 
-type Screen = "today" | "household" | "inventory" | "memory" | "approvals";
-const demoScenarios = ["default", "expiry_routine", "preference_conflict", "guests", "cook_mishap", "feedback_learning", "budget_constraint"] as const;
-const scenarioLabel = (scenario: string) => scenario.replaceAll("_", " ");
+type Screen = "today" | "household" | "inventory" | "dishes" | "memory" | "approvals";
 const split = (value: FormDataEntryValue | null) => String(value ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 const value = (form: FormData, name: string) => String(form.get(name) ?? "");
 
@@ -25,7 +23,7 @@ export default function App() {
   const [loops, setLoops] = useState<MealLoop[]>([]);
   const [audit, setAudit] = useState<AuditEvent[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
-  const [selectedScenario, setSelectedScenario] = useState<(typeof demoScenarios)[number]>("default");
+  const [dishes, setDishes] = useState<Dish[]>([]);
   const [message, setMessage] = useState("Loading local household memory…");
 
   const load = async (selected?: number | null) => {
@@ -35,30 +33,30 @@ export default function App() {
       const id = selected ?? householdId ?? nextHouseholds[0]?.id ?? null;
       setHouseholdId(id);
       if (id) {
-        const [nextMembers, nextProfile, nextBudget, nextInventory, nextLeftovers, nextHistory, nextPreferences, nextLoops, nextAudit, nextApprovals] = await Promise.all([
-          api.members(id), api.cookProfile(id), api.budget(id), api.inventory(id), api.leftovers(id), api.history(id), api.preferences(id), api.mealLoops(id), api.audit(id), api.approvals(id),
+        const [nextMembers, nextProfile, nextBudget, nextInventory, nextLeftovers, nextDishes, nextHistory, nextPreferences, nextLoops, nextAudit, nextApprovals] = await Promise.all([
+          api.members(id), api.cookProfile(id), api.budget(id), api.inventory(id), api.leftovers(id), api.dishes(id), api.history(id), api.preferences(id), api.mealLoops(id), api.audit(id), api.approvals(id),
         ]);
-        setMembers(nextMembers); setProfile(nextProfile); setBudget(nextBudget); setInventory(nextInventory); setLeftovers(nextLeftovers); setHistory(nextHistory); setPreferences(nextPreferences); setLoops(nextLoops); setAudit(nextAudit); setApprovals(nextApprovals);
+        setMembers(nextMembers); setProfile(nextProfile); setBudget(nextBudget); setInventory(nextInventory); setLeftovers(nextLeftovers); setDishes(nextDishes); setHistory(nextHistory); setPreferences(nextPreferences); setLoops(nextLoops); setAudit(nextAudit); setApprovals(nextApprovals);
       }
-      setMessage(id ? "Persistent household memory is loaded." : "Create a household or reset the demo to begin.");
+      setMessage(id ? "Persistent household memory is loaded." : "Create a household to begin.");
     } catch { setMessage("The local backend is unavailable."); }
   };
   useEffect(() => { void load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const current = households.find((item) => item.id === householdId);
   const refresh = () => void load(householdId);
-  const resetDemo = async () => { const result = await api.resetDemo(selectedScenario); setPlan(null); await load(result.household_id); setMessage(`${scenarioLabel(result.scenario)} demo fixture was reset.`); };
   const createHousehold = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const form = new FormData(event.currentTarget); const item = await api.createHousehold({ name: value(form, "name"), default_language: value(form, "language") || "English" }); event.currentTarget.reset(); await load(item.id); setScreen("household"); };
   const requireHousehold = () => householdId !== null;
 
   return <main>
     <p className="eyebrow">LOCAL-FIRST PROTOTYPE · PHASE 7</p><h1>Household Agent</h1>
     <p className="lede">Local household memory, deterministic meal workflows, and review-first voice or photo inventory capture.</p>
-    <nav aria-label="Application pages">{(["today", "household", "inventory", "memory", "approvals"] as Screen[]).map((item) => <button className={screen === item ? "nav active" : "nav"} key={item} onClick={() => setScreen(item)}>{item}</button>)}</nav>
-    <section className="toolbar"><label>Household <select value={householdId ?? ""} onChange={(event) => void load(Number(event.target.value))}><option value="">Select</option>{households.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Demo scenario <select aria-label="Demo scenario" value={selectedScenario} onChange={(event) => setSelectedScenario(event.target.value as (typeof demoScenarios)[number])}>{demoScenarios.map((scenario) => <option key={scenario} value={scenario}>{scenarioLabel(scenario)}</option>)}</select></label><button onClick={() => void resetDemo()}>Reset selected demo</button></section>
+    <nav aria-label="Application pages">{(["today", "household", "inventory", "dishes", "memory", "approvals"] as Screen[]).map((item) => <button className={screen === item ? "nav active" : "nav"} key={item} onClick={() => setScreen(item)}>{item === "dishes" ? "Recipe Book" : item}</button>)}</nav>
+    <section className="toolbar"><label>Household <select value={householdId ?? ""} onChange={(event) => void load(Number(event.target.value))}><option value="">Select</option>{households.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></section>
     {!requireHousehold() && <section><h2>Create a household</h2><form onSubmit={(event) => void createHousehold(event)}><input name="name" placeholder="Household name" required /><input name="language" placeholder="Default language" defaultValue="English" /><button>Create household</button></form></section>}
     {screen === "today" && <Today health={health} householdId={householdId} plan={plan} loops={loops} audit={audit} approvals={approvals} history={history} preferences={preferences} onRefresh={refresh} onPlan={async () => { if (householdId) setPlan(await api.plan(householdId, { servings: 2, available_minutes: 45, guests: 0, urgency: "routine" })); }} />}
     {requireHousehold() && screen === "household" && <HouseholdPage household={current!} members={members} profile={profile} budget={budget} onRefresh={refresh} />}
     {requireHousehold() && screen === "inventory" && <InventoryPage inventory={inventory} leftovers={leftovers} householdId={householdId!} onRefresh={refresh} />}
+    {requireHousehold() && screen === "dishes" && <RecipeBook householdId={householdId!} dishes={dishes} onRefresh={refresh} />}
     {requireHousehold() && screen === "memory" && <MemoryPage history={history} preferences={preferences} householdId={householdId!} onRefresh={refresh} />}
     {requireHousehold() && screen === "approvals" && <section><h2>Approvals</h2><button onClick={() => void api.scheduledTrigger(householdId!).then(refresh)}>Run scheduled local trigger</button><ul>{approvals.map((item) => <li key={item.id}><strong>{item.action}</strong> · {item.tier} · ₹{item.amount_inr} · {item.status}<button className="quiet" onClick={() => void api.decideApproval(householdId!, item.id, true).then(refresh)}>Approve</button><button className="quiet" onClick={() => void api.decideApproval(householdId!, item.id, false).then(refresh)}>Reject</button></li>)}</ul></section>}
     <p role="status">{message}</p>
@@ -66,9 +64,38 @@ export default function App() {
 }
 
 function Today({ health, householdId, plan, loops, audit, approvals, history, preferences, onRefresh, onPlan }: { health: HealthResponse | null; householdId: number | null; plan: PlanResponse | null; loops: MealLoop[]; audit: AuditEvent[]; approvals: Approval[]; history: DishHistory[]; preferences: Preference[]; onRefresh: () => void; onPlan: () => Promise<void> }) {
+  const [discovered, setDiscovered] = useState<DiscoveredDish[]>([]);
+  const [discoveryMessage, setDiscoveryMessage] = useState("");
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const discover = async () => {
+    if (!householdId) return;
+    setIsDiscovering(true);
+    setDiscoveryMessage("🤖 AI is scanning your fridge…");
+    setDiscovered([]);
+    try {
+      const result = await api.discoverDishes(householdId);
+      setDiscovered(result.dishes);
+      setDiscoveryMessage(result.dishes.length ? "AI dishes found from your active inventory." : "No active inventory items are available to turn into dishes yet.");
+    } catch (error) { setDiscoveryMessage(`Dish discovery failed: ${error instanceof Error ? error.message : "unknown error"}`); }
+    finally { setIsDiscovering(false); }
+  };
+  const saveDiscovered = async (dish: DiscoveredDish) => {
+    if (!householdId) return;
+    await api.createDish(householdId, { name: dish.name, ingredients: dish.ingredients, prep_minutes: dish.prep_minutes, servings: dish.servings, nutrition_notes: dish.nutrition_notes, tags: [], cook_skill_required: dish.cook_skill_required });
+    setDiscovered((items) => items.map((item) => item.name === dish.name ? { ...item, is_new: false } : item));
+    setDiscoveryMessage("Saved to family's personal recipe book!");
+    onRefresh();
+    await onPlan();
+  };
+  const requestPurchaseApproval = async (dish: DiscoveredDish) => {
+    if (!householdId) return;
+    const result = await api.requestDiscoveryApproval(householdId, { name: dish.name, ingredients: dish.ingredients, servings: dish.servings });
+    setDiscoveryMessage(result.status === "approval_requested" ? `Approval requested for missing ingredients${dish.procurement.estimated_cost_inr ? ` (estimated ₹${dish.procurement.estimated_cost_inr})` : ""}.` : "Everything for this dish is already in stock.");
+    onRefresh();
+  };
   return <>
     <section aria-label="Service health"><h2>Runtime health</h2><p>SQLite: <strong>{health?.database.status ?? "checking"}</strong></p><p>Ollama / {health?.ollama.model ?? "qwen3:4b"}: <strong>{health?.ollama.status ?? "checking"}</strong></p>{health?.ollama.detail && <p className="detail">{health.ollama.detail}</p>}<p>Scheduler: <strong>{health?.scheduler.status ?? "checking"}</strong></p>{health?.scheduler.detail && <p className="detail">{health.scheduler.detail}</p>}<button onClick={onRefresh}>Refresh health</button></section>
-    {householdId && <section aria-label="Decision explanation"><h2>Today’s deterministic proposal</h2><p>Uses stored household state only; it creates no action or order.</p><button onClick={() => void onPlan()}>Plan routine dinner</button>{plan && <DecisionExplanation plan={plan} />}</section>}
+    {householdId && <section aria-label="Decision explanation"><h2>Today's deterministic proposal</h2><p>Uses stored household state only; it creates no action or order.</p><button onClick={() => void onPlan()}>Plan routine dinner</button><button onClick={() => void discover()} disabled={isDiscovering} aria-busy={isDiscovering}>{isDiscovering ? "⏳ AI is thinking…" : "✨ Discover dishes from my fridge (AI)"}</button>{discoveryMessage && <p role="status">{discoveryMessage}</p>}{isDiscovering && <div className="loading-bar" aria-hidden="true"><div className="loading-bar-fill" /></div>}{discovered.map((dish) => <article className="decision" key={dish.name}><h3>{dish.name} {dish.is_new && <span className="status fresh">✨ New AI Recipe</span>}</h3><p>{dish.prep_minutes} min · {dish.servings} servings · {dish.cook_skill_required}</p><p>{dish.rationale}</p><p>Ingredients: {dish.ingredients.map((ingredient) => `${ingredient.name} (${ingredient.quantity} ${ingredient.unit})`).join(" · ")}</p><p><strong>Missing ingredients:</strong> {dish.missing_ingredients.length ? dish.missing_ingredients.map((gap) => `${gap.ingredient} (${gap.shortfall} ${gap.unit} needed)`).join(" · ") : "none — ready to cook"}</p><p><strong>Purchase estimate:</strong> ₹{dish.procurement.estimated_cost_inr} · {dish.procurement.route.replaceAll("_", " ")} · {dish.procurement.reason}</p>{dish.missing_ingredients.length > 0 && <button onClick={() => void requestPurchaseApproval(dish)}>Request approval to buy missing ingredients</button>}{dish.is_new ? <button onClick={() => void saveDiscovered(dish)}>Add to Family Recipe Book</button> : <p>Already in your family recipe book.</p>}</article>)}{plan && <DecisionExplanation plan={plan} />}</section>}
     {householdId && <AgentTimeline loops={loops} audit={audit} approvals={approvals} history={history} preferences={preferences} />}
   </>;
 }
@@ -96,16 +123,82 @@ function HouseholdPage({ household, members, profile, budget, onRefresh }: { hou
   return <><section><h2>Household profile</h2><form onSubmit={(e) => void saveHousehold(e)}><input name="name" defaultValue={household.name} required /><input name="language" defaultValue={household.default_language} required /><button>Save household</button></form></section><section><h2>Members</h2><ul>{members.map((item) => <li key={item.id}><strong>{item.name}</strong> · {item.language} · diet: {item.dietary_preferences.join(", ") || "—"} · allergies: {item.allergies.join(", ") || "none"}<button className="quiet" onClick={() => void editMember(item)}>Edit</button><button className="quiet" onClick={() => void api.deleteMember(household.id, item.id).then(onRefresh)}>Remove</button></li>)}</ul><form onSubmit={(e) => void addMember(e)}><input name="name" placeholder="Member name" required /><input name="language" placeholder="Language" /><input name="diet" placeholder="Diet, comma-separated" /><input name="allergies" placeholder="Allergies, comma-separated" /><input name="likes" placeholder="Likes, comma-separated" /><input name="dislikes" placeholder="Dislikes, comma-separated" /><button>Add member</button></form></section><section><h2>Cook profile</h2><form onSubmit={(e) => void saveProfile(e)}><input name="name" defaultValue={profile?.name ?? "Cook"} /><input name="language" defaultValue={profile?.language ?? "Hindi"} /><input name="skill" defaultValue={profile?.skill_level ?? "intermediate"} /><input name="hours" defaultValue={profile?.available_hours.join(", ") ?? ""} placeholder="Available hours" /><input name="dishes" defaultValue={profile?.confident_dishes.join(", ") ?? ""} placeholder="Confident dishes" /><button>Save cook profile</button></form></section><section><h2>Monthly budget</h2><form onSubmit={(e) => void saveBudget(e)}><input name="limit" type="number" min="0" defaultValue={budget?.monthly_limit ?? 0} /><input name="spent" type="number" min="0" defaultValue={budget?.spent_amount ?? 0} /><input name="planned" type="number" min="0" defaultValue={budget?.planned_amount ?? 0} /><button>Save budget</button></form></section></>;
 }
 
-function InventoryPage({ householdId, inventory, leftovers, onRefresh }: { householdId: number; inventory: InventoryLot[]; leftovers: Leftover[]; onRefresh: () => void }) {
+function InventoryPage({ householdId, inventory: inventoryProp, leftovers: leftoversProp, onRefresh }: { householdId: number; inventory: InventoryLot[]; leftovers: Leftover[]; onRefresh: () => void }) {
   const [preview, setPreview] = useState<CapturePreview | null>(null);
   const [captureError, setCaptureError] = useState("");
-  const addInventory = async (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); const f = new FormData(e.currentTarget); await api.createInventory(householdId, { ingredient: value(f, "ingredient"), quantity: Number(value(f, "quantity")), unit: value(f, "unit"), expiry_date: value(f, "expiry") || null, storage_location: value(f, "location"), confirmed: f.get("confirmed") === "on" }); e.currentTarget.reset(); onRefresh(); };
-  const previewUpload = async (kind: "audio" | "image", file?: File) => { if (!file) return; try { setCaptureError(""); setPreview(kind === "audio" ? await api.previewAudio(householdId, file) : await api.previewImage(householdId, file)); } catch { setCaptureError("Upload could not be previewed. Typed inventory remains available below."); } };
-  const confirmCandidate = async (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); const f = new FormData(e.currentTarget); await api.confirmCapture(householdId, { ingredient: value(f, "ingredient"), quantity: Number(value(f, "quantity")), unit: value(f, "unit"), expiry_date: value(f, "expiry") || null, storage_location: value(f, "location") || "pantry", confirmed: true }); setPreview(null); onRefresh(); };
-  const addLeftover = async (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); const f = new FormData(e.currentTarget); await api.createLeftover(householdId, { dish_name: value(f, "dish"), portions: Number(value(f, "portions")), expiry_date: value(f, "expiry") || null, storage_location: value(f, "location") || "fridge", reuse_suggestions: split(f.get("suggestions")) }); e.currentTarget.reset(); onRefresh(); };
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadLabel, setUploadLabel] = useState("");
+  // Local copies for instant updates
+  const [inventory, setInventory] = useState<InventoryLot[]>(inventoryProp);
+  const [leftovers, setLeftovers] = useState<Leftover[]>(leftoversProp);
+  // Keep local state in sync when parent refreshes
+  useEffect(() => { setInventory(inventoryProp); }, [inventoryProp]);
+  useEffect(() => { setLeftovers(leftoversProp); }, [leftoversProp]);
+
+  const addInventory = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const f = new FormData(e.currentTarget);
+    const newItem = await api.createInventory(householdId, { ingredient: value(f, "ingredient"), quantity: Number(value(f, "quantity")), unit: value(f, "unit"), expiry_date: value(f, "expiry") || null, freshness: value(f, "freshness") || "fresh", storage_location: value(f, "location"), confirmed: f.get("confirmed") === "on" });
+    // Instant update — append to local list right away
+    setInventory((prev) => [...prev, newItem]);
+    e.currentTarget.reset();
+    onRefresh();
+  };
+
+  const previewUpload = async (kind: "audio" | "image", file?: File) => {
+    if (!file) return;
+    setIsUploading(true);
+    setUploadLabel(kind === "audio" ? "🎙️ Transcribing voice note…" : "📷 Analysing photo with AI…");
+    setCaptureError("");
+    setPreview(null);
+    try {
+      setPreview(kind === "audio" ? await api.previewAudio(householdId, file) : await api.previewImage(householdId, file));
+    } catch { setCaptureError("Upload could not be previewed. Typed inventory remains available below."); }
+    finally { setIsUploading(false); setUploadLabel(""); }
+  };
+
+  const confirmCandidate = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const f = new FormData(e.currentTarget);
+    const newItem = await api.confirmCapture(householdId, { ingredient: value(f, "ingredient"), quantity: Number(value(f, "quantity")), unit: value(f, "unit"), expiry_date: value(f, "expiry") || null, freshness: value(f, "freshness") || "fresh", storage_location: value(f, "location") || "pantry", confirmed: true });
+    // Instant update
+    setInventory((prev) => [...prev, newItem]);
+    setPreview(null);
+    onRefresh();
+  };
+
+  const addLeftover = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const f = new FormData(e.currentTarget);
+    const newLeftover = await api.createLeftover(householdId, { dish_name: value(f, "dish"), portions: Number(value(f, "portions")), expiry_date: value(f, "expiry") || null, storage_location: value(f, "location") || "fridge", reuse_suggestions: split(f.get("suggestions")) });
+    setLeftovers((prev) => [...prev, newLeftover]);
+    e.currentTarget.reset();
+    onRefresh();
+  };
+
   const editInventory = async (item: InventoryLot) => { const quantity = window.prompt(`Quantity of ${item.ingredient}`, String(item.quantity)); if (quantity !== null && !Number.isNaN(Number(quantity))) { await api.updateInventory(householdId, item.id, { ...item, quantity: Number(quantity) }); onRefresh(); } };
   const editLeftover = async (item: Leftover) => { const portions = window.prompt(`Portions of ${item.dish_name}`, String(item.portions)); if (portions !== null && !Number.isNaN(Number(portions))) { await api.updateLeftover(householdId, item.id, { ...item, portions: Number(portions) }); onRefresh(); } };
-  return <><section><h2>Inventory</h2><ul>{inventory.map((item) => <li key={item.id}><strong>{item.ingredient}</strong> · {item.quantity} {item.unit} · <span className={`status ${item.expiry_status}`}>{item.expiry_status.replaceAll("_", " ")}</span> · {item.storage_location}<button className="quiet" onClick={() => void editInventory(item)}>Edit</button><button className="quiet" onClick={() => void api.deleteInventory(householdId, item.id).then(onRefresh)}>Remove</button></li>)}</ul><h3>Voice or photo capture</h3><p>Files are processed only by configured local models. Review every proposed field before saving.</p><label>Voice note <input aria-label="Voice note" type="file" accept="audio/*" onChange={(e) => void previewUpload("audio", e.currentTarget.files?.[0])} /></label><label>Fridge photo <input aria-label="Fridge photo" type="file" accept="image/*" onChange={(e) => void previewUpload("image", e.currentTarget.files?.[0])} /></label>{captureError && <p role="alert">{captureError}</p>}{preview && <section aria-label="Capture review"><h3>Review capture</h3>{preview.transcript !== null && <><label>Editable transcript <textarea aria-label="Editable transcript" defaultValue={preview.transcript} /></label><p>{preview.language ? `Detected language: ${preview.language}` : "Transcript needs manual parsing."}</p></>}{preview.fallback && <p role="alert">{preview.fallback}</p>}{preview.warning && <p role="alert">{preview.warning}</p>}{preview.candidates.map((candidate, index) => <form key={`${candidate.ingredient}-${index}`} onSubmit={(e) => void confirmCandidate(e)}><input name="ingredient" aria-label="Ingredient" defaultValue={candidate.ingredient} required /><input name="quantity" aria-label="Quantity" type="number" min="0" step="any" defaultValue={candidate.quantity} required /><input name="unit" aria-label="Unit" defaultValue={candidate.unit} required /><input name="expiry" aria-label="Expiry" type="date" defaultValue={candidate.expiry_date ?? ""} /><input name="location" aria-label="Storage location" defaultValue={candidate.storage_location} /><span>readability confidence {Math.round(candidate.readability_confidence * 100)}%</span><button>Confirm capture</button></form>)}</section>}<h3>Typed inventory</h3><form onSubmit={(e) => void addInventory(e)}><input name="ingredient" placeholder="Ingredient" required /><input name="quantity" type="number" min="0" step="any" placeholder="Quantity" required /><input name="unit" placeholder="Unit" required /><input name="expiry" type="date" /><input name="location" placeholder="Storage location" defaultValue="pantry" /><label><input name="confirmed" type="checkbox" /> Confirmed</label><button>Add inventory</button></form></section><section><h2>Leftovers</h2><ul>{leftovers.map((item) => <li key={item.id}><strong>{item.dish_name}</strong> · {item.portions} portions · <span className={`status ${item.expiry_status}`}>{item.expiry_status.replaceAll("_", " ")}</span><button className="quiet" onClick={() => void editLeftover(item)}>Edit</button><button className="quiet" onClick={() => void api.deleteLeftover(householdId, item.id).then(onRefresh)}>Remove</button></li>)}</ul><form onSubmit={(e) => void addLeftover(e)}><input name="dish" placeholder="Dish" required /><input name="portions" type="number" min="0" step="any" placeholder="Portions" required /><input name="expiry" type="date" /><input name="location" defaultValue="fridge" /><input name="suggestions" placeholder="Reuse suggestions" /><button>Add leftover</button></form></section></>;
+
+  return <><section><h2>Inventory</h2><ul>{inventory.map((item) => <li key={item.id}><strong>{item.ingredient}</strong> · {item.quantity} {item.unit} · <span className={`status ${item.expiry_status}`}>{item.expiry_status.replaceAll("_", " ")}</span> · {(item.freshness ?? "fresh").replaceAll("_", " ")} · {item.storage_location}<button className="quiet" onClick={() => void editInventory(item)}>Edit</button><button className="quiet" onClick={() => void api.deleteInventory(householdId, item.id).then(onRefresh)}>Remove</button></li>)}</ul><h3>Voice or photo capture</h3><p>Files are processed only by configured local models. Review every proposed field before saving.</p>{isUploading && <><p role="status" className="upload-status">{uploadLabel}</p><div className="loading-bar" aria-hidden="true"><div className="loading-bar-fill" /></div></>}<label>Voice note <input aria-label="Voice note" type="file" accept="audio/*" disabled={isUploading} onChange={(e) => void previewUpload("audio", e.currentTarget.files?.[0])} /></label><label>Fridge photo <input aria-label="Fridge photo" type="file" accept="image/*" disabled={isUploading} onChange={(e) => void previewUpload("image", e.currentTarget.files?.[0])} /></label>{captureError && <p role="alert">{captureError}</p>}{preview && <section aria-label="Capture review"><h3>Review capture</h3>{preview.transcript !== null && <><label>Editable transcript <textarea aria-label="Editable transcript" defaultValue={preview.transcript} /></label><p>{preview.language ? `Detected language: ${preview.language}` : "Transcript needs manual parsing."}</p></>}{preview.fallback && <p role="alert">{preview.fallback}</p>}{preview.warning && <p role="alert">{preview.warning}</p>}{preview.candidates.map((candidate, index) => <form key={`${candidate.ingredient}-${index}`} onSubmit={(e) => void confirmCandidate(e)}><input name="ingredient" aria-label="Ingredient" defaultValue={candidate.ingredient} required /><input name="quantity" aria-label="Quantity" type="number" min="0" step="any" defaultValue={candidate.quantity} required /><input name="unit" aria-label="Unit" defaultValue={candidate.unit} required /><select name="freshness" aria-label="Freshness" defaultValue={candidate.freshness || "fresh"}><FreshnessOptions /></select><input name="expiry" aria-label="Expiry" type="date" defaultValue={candidate.expiry_date ?? ""} /><input name="location" aria-label="Storage location" defaultValue={candidate.storage_location} /><span>readability confidence {Math.round(candidate.readability_confidence * 100)}%</span><button>Confirm capture</button></form>)}</section>}<h3>Typed inventory</h3><form onSubmit={(e) => void addInventory(e)}><input name="ingredient" placeholder="Ingredient" required /><input name="quantity" type="number" min="0" step="any" placeholder="Quantity" required /><input name="unit" placeholder="Unit" required /><select name="freshness" aria-label="Freshness" defaultValue="fresh"><FreshnessOptions /></select><input name="expiry" type="date" /><input name="location" placeholder="Storage location" defaultValue="pantry" /><label><input name="confirmed" type="checkbox" /> Confirmed</label><button>Add inventory</button></form></section><section><h2>Leftovers</h2><ul>{leftovers.map((item) => <li key={item.id}><strong>{item.dish_name}</strong> · {item.portions} portions · <span className={`status ${item.expiry_status}`}>{item.expiry_status.replaceAll("_", " ")}</span><button className="quiet" onClick={() => void editLeftover(item)}>Edit</button><button className="quiet" onClick={() => void api.deleteLeftover(householdId, item.id).then(onRefresh)}>Remove</button></li>)}</ul><form onSubmit={(e) => void addLeftover(e)}><input name="dish" placeholder="Dish" required /><input name="portions" type="number" min="0" step="any" placeholder="Portions" required /><input name="expiry" type="date" /><input name="location" defaultValue="fridge" /><input name="suggestions" placeholder="Reuse suggestions" /><button>Add leftover</button></form></section></>;
+}
+
+function FreshnessOptions() {
+  return <><option value="fresh">Fresh (Good for a week)</option><option value="expiring_soon">Expiring Soon (Use in 2-3 days)</option><option value="use_immediately">Use Immediately (Expires today)</option></>;
+}
+
+function RecipeBook({ householdId, dishes, onRefresh }: { householdId: number; dishes: Dish[]; onRefresh: () => void }) {
+  const addDish = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await api.createDish(householdId, {
+      name: value(form, "name"),
+      ingredients: split(form.get("ingredients")).map((name) => ({ name, quantity: 1, unit: "portion" })),
+      prep_minutes: Number(value(form, "prep") || 0), servings: Number(value(form, "servings") || 1),
+      nutrition_notes: split(form.get("notes")), tags: split(form.get("tags")), cook_skill_required: value(form, "skill") || "beginner",
+    });
+    event.currentTarget.reset(); onRefresh();
+  };
+  return <section><h2>Family Recipe Book</h2><p>Recipes saved here are permanent household memory and are available to deterministic dinner planning.</p><ul>{dishes.map((dish) => <li key={dish.id}><strong>{dish.name}</strong> · {dish.prep_minutes} min · {dish.servings} servings · {dish.ingredients.map((ingredient) => ingredient.name).join(", ")}<button className="quiet" onClick={() => void api.deleteDish(householdId, dish.id).then(onRefresh)}>Remove</button></li>)}</ul><h3>Add a family recipe</h3><form onSubmit={(event) => void addDish(event)}><input name="name" placeholder="Dish name" required /><input name="ingredients" placeholder="Ingredients, comma-separated" /><input name="prep" type="number" min="0" placeholder="Prep minutes" /><input name="servings" type="number" min="1" defaultValue="2" /><input name="notes" placeholder="Nutrition notes, comma-separated" /><input name="tags" placeholder="Tags, comma-separated" /><select name="skill" defaultValue="beginner"><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select><button>Add recipe</button></form></section>;
 }
 
 function MemoryPage({ householdId, history, preferences, onRefresh }: { householdId: number; history: DishHistory[]; preferences: Preference[]; onRefresh: () => void }) {

@@ -68,6 +68,7 @@ class InventoryLot(SQLModel, table=True):
     unit: str = Field(min_length=1, max_length=32)
     purchased_on: date | None = None
     expiry_date: date | None = Field(default=None, index=True)
+    freshness: str = Field(default="fresh", max_length=32)
     storage_location: str = Field(default="pantry", max_length=32)
     confirmed: bool = False
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

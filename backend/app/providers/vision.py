@@ -18,10 +18,11 @@ INVENTORY_SCHEMA = {
                     "estimated_quantity": {"type": "number"},
                     "unit": {"type": "string"},
                     "expiry_date": {"type": ["string", "null"]},
+                    "freshness": {"type": "string", "enum": ["fresh", "expiring_soon", "use_immediately"]},
                     "readability_confidence": {"type": "number"},
                     "storage_hint": {"type": "string"},
                 },
-                "required": ["ingredient", "estimated_quantity", "unit", "expiry_date", "readability_confidence", "storage_hint"],
+                "required": ["ingredient", "estimated_quantity", "unit", "expiry_date", "freshness", "readability_confidence", "storage_hint"],
                 "additionalProperties": False,
             },
         },
@@ -45,7 +46,7 @@ class VisionProvider:
         prompt = (
             "Inspect this fridge or pantry photo. Return at most six clearly visible food items using the supplied JSON schema. "
             "Populate real observed values only; never use placeholder words. Estimate quantity only from what is visible. "
-            "Set expiry_date to null unless a date is readable, and set readability_confidence from 0 to 1 based on visual clarity."
+            "Set expiry_date to null unless a date is readable. For freshness, estimate fresh, expiring_soon, or use_immediately from visible condition; use fresh when no spoilage is visible. Set readability_confidence from 0 to 1 based on visual clarity."
         )
         try:
             with httpx.Client(timeout=self.timeout) as client:

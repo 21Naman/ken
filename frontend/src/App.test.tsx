@@ -75,43 +75,6 @@ describe("household UI", () => {
     expect(screen.getByText("Detected language: hi")).toBeTruthy();
   });
 
-  const traces: Record<string, { trigger: string; triggerType: string; status: string; events: string[]; tier?: "red" | "yellow" }> = {
-    expiry_routine: { trigger: "routine expiry", triggerType: "routine_expiry", status: "completed", events: ["triggered", "planned", "local task created", "completed"] },
-    preference_conflict: { trigger: "preference conflict", triggerType: "preference_conflict", status: "awaiting approval", events: ["triggered", "planned", "approval requested"], tier: "red" },
-    guests: { trigger: "guest arrival", triggerType: "guest_arrival", status: "triggered", events: ["triggered"] },
-    cook_mishap: { trigger: "cooking mishap", triggerType: "cooking_mishap", status: "cooking", events: ["triggered", "planned", "approved", "cook briefed", "cooking"] },
-    feedback_learning: { trigger: "manual", triggerType: "manual", status: "completed", events: ["triggered", "planned", "approved", "cooking", "completed"] },
-    budget_constraint: { trigger: "budget constraint", triggerType: "budget_constraint", status: "awaiting approval", events: ["triggered", "planned", "approval requested"], tier: "yellow" },
-  };
-
-  it.each(Object.entries(traces))("renders the %s fixture audit sequence in order", async (scenario, trace) => {
-    let activeScenario = "default";
-    vi.stubGlobal("fetch", vi.fn((url: string) => {
-      const path = String(url);
-      if (path.includes("/demo/reset?scenario=")) { activeScenario = new URL(path).searchParams.get("scenario") ?? "default"; return Promise.resolve(json({ status: "reset", scenario: activeScenario, recipes: 2, store_items: 3, household_id: 7 })); }
-      if (path.endsWith("/health")) return Promise.resolve(json({ status: "ok", database: { status: "available" }, ollama: { status: "available", model: "qwen3:4b", detail: null }, scheduler: { status: "available", detail: null } }));
-      if (path.endsWith("/households")) return Promise.resolve(json([household]));
-      if (path.includes("/members")) return Promise.resolve(json([]));
-      if (path.includes("/cook-profile") || path.includes("/budget")) return Promise.resolve(json(null));
-      if (path.includes("/inventory") || path.includes("/leftovers")) return Promise.resolve(json([]));
-      if (path.includes("/history")) return Promise.resolve(json(activeScenario === "feedback_learning" ? [{ id: 31, dish_name: "Paneer Bhurji", served_on: "2026-09-12", accepted: false, rating: 2, feedback: "Too heavy", leftovers_portions: 1 }] : []));
-      if (path.includes("/preferences")) return Promise.resolve(json(activeScenario === "feedback_learning" ? [{ id: 32, signal: "Prefer light dinners after paneer felt too heavy", sentiment: "positive", context: "completed meal feedback", confidence: 1, expires_on: null }] : []));
-      if (path.includes("/meal-loops")) return Promise.resolve(json(activeScenario === "default" ? [] : [{ id: 22, trigger_type: trace.triggerType, context_note: "fixture context", status: trace.status }]));
-      if (path.includes("/audit")) return Promise.resolve(json(activeScenario === "default" ? [] : trace.events.map((event, index) => ({ id: index + 1, meal_loop_id: 22, event: event.replaceAll(" ", "_"), detail: `${scenario} event ${index + 1}`, created_at: "2026-09-12T00:00:00Z" }))));
-      if (path.includes("/approvals")) return Promise.resolve(json(trace.tier && activeScenario !== "default" ? [{ id: 44, meal_loop_id: 22, action: "fixture decision", tier: trace.tier, amount_inr: 137, status: "pending", reason: "fixture approval" }] : []));
-      return Promise.resolve(json({}));
-    }));
-    render(<App />);
-    await screen.findByText("Persistent household memory is loaded.");
-    fireEvent.change(screen.getByLabelText("Demo scenario"), { target: { value: scenario } });
-    fireEvent.click(screen.getByRole("button", { name: "Reset selected demo" }));
-    const timeline = await screen.findByRole("article", { name: "Loop 22 timeline" });
-    expect(within(timeline).getByRole("heading", { name: `Trigger: ${trace.trigger}` })).toBeTruthy();
-    expect(within(timeline).getAllByRole("listitem").map((item) => item.textContent?.split(" — ")[0])).toEqual(trace.events);
-    if (trace.tier) expect(within(timeline).getByText(`Autonomy: ${trace.tier}`)).toBeTruthy();
-    if (scenario === "feedback_learning") expect(within(timeline).getByText(/Preference signals: Prefer light dinners after paneer felt too heavy/)).toBeTruthy();
-  });
-
   it("renders the exact API score, gap, and procurement explanation without recomputing it", async () => {
     vi.stubGlobal("fetch", vi.fn((url: string) => {
       const path = String(url);

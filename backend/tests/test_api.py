@@ -423,6 +423,80 @@ def test_confirmed_capture_commits_the_expected_inventory_row(monkeypatch):
     app.dependency_overrides.clear()
 
 
+def test_freshness_estimates_expiry_for_typed_and_confirmed_capture(monkeypatch):
+    client, _ = make_client(monkeypatch, OllamaHealth("available", "qwen3:4b"))
+    with client:
+        household_id = client.post("/api/demo/reset").json()["household_id"]
+        fresh = client.post(f"/api/households/{household_id}/inventory", json={"ingredient": "tomato", "quantity": 2, "unit": "piece", "freshness": "fresh"}).json()
+        soon = client.post(f"/api/households/{household_id}/capture/confirm", json={"ingredient": "onion", "quantity": 2, "unit": "piece", "freshness": "expiring_soon", "confirmed": True}).json()
+        now = client.post(f"/api/households/{household_id}/capture/confirm", json={"ingredient": "coriander", "quantity": 1, "unit": "bunch", "freshness": "use_immediately", "confirmed": True}).json()
+    assert fresh["freshness"] == "fresh" and fresh["expiry_date"] == str(date.today() + timedelta(days=7))
+    assert soon["expiry_status"] == "expiring_soon" and soon["expiry_date"] == str(date.today() + timedelta(days=2))
+    assert now["expiry_status"] == "expires_today" and now["expiry_date"] == str(date.today())
+    app.dependency_overrides.clear()
+
+
+def test_discover_dishes_marks_existing_recipes_and_returns_new_recipes(monkeypatch):
+    client, _ = make_client(monkeypatch, OllamaHealth("available", "qwen3:4b"))
+    response = {"dishes": [
+        {"name": "Vegetable Khichdi", "ingredients": [{"name": "rice", "quantity": 1, "unit": "cup"}], "prep_minutes": 35, "servings": 2, "nutrition_notes": ["light"], "cook_skill_required": "beginner", "rationale": "Uses rice."},
+        {"name": "Homestyle Margherita Pizza", "ingredients": [{"name": "pizza dough", "quantity": 1, "unit": "piece"}, {"name": "mozzarella cheese", "quantity": 200, "unit": "g"}, {"name": "tomato sauce", "quantity": 3, "unit": "tbsp"}], "prep_minutes": 20, "servings": 2, "nutrition_notes": ["vegetarian"], "cook_skill_required": "beginner", "rationale": "Uses pizza ingredients."},
+    ]}
+    monkeypatch.setattr(OllamaProvider, "generate_structured", lambda *_: response)
+    with client:
+        household_id = client.post("/api/demo/reset").json()["household_id"]
+        discovered = client.post(f"/api/households/{household_id}/discover-dishes").json()["dishes"]
+        saved = client.post(f"/api/households/{household_id}/dishes", json={key: value for key, value in discovered[1].items() if key in {"name", "ingredients", "prep_minutes", "servings", "nutrition_notes", "cook_skill_required"}})
+    assert discovered[0]["is_new"] is False and discovered[0]["dish_id"] is not None
+    assert discovered[1]["is_new"] is True and discovered[1]["dish_id"] is None
+    assert saved.status_code == 201
+    app.dependency_overrides.clear()
+
+
+def test_discovered_recipe_reports_gaps_price_estimate_and_can_request_approval(monkeypatch):
+    client, _ = make_client(monkeypatch, OllamaHealth("available", "qwen3:4b"))
+    pizza = {"dishes": [{"name": "Pan Pizza", "ingredients": [{"name": "flour", "quantity": 300, "unit": "g"}, {"name": "tomato sauce", "quantity": 3, "unit": "tbsp"}, {"name": "cheese", "quantity": 200, "unit": "g"}, {"name": "yeast", "quantity": 1, "unit": "packet"}], "prep_minutes": 30, "servings": 2, "nutrition_notes": ["vegetarian"], "cook_skill_required": "beginner", "rationale": "Uses flour, sauce, and cheese."}]}
+    monkeypatch.setattr(OllamaProvider, "generate_structured", lambda *_: pizza)
+    with client:
+        household_id = client.post("/api/demo/reset").json()["household_id"]
+        for item in (("flour", 1, "kg"), ("tomato sauce", 3, "tbsp"), ("cheese", 200, "g")):
+            client.post(f"/api/households/{household_id}/inventory", json={"ingredient": item[0], "quantity": item[1], "unit": item[2]})
+        discovered = client.post(f"/api/households/{household_id}/discover-dishes").json()["dishes"][0]
+        approval = client.post(f"/api/households/{household_id}/discover-dishes/approval", json={"name": discovered["name"], "ingredients": discovered["ingredients"], "servings": discovered["servings"]}).json()
+        approvals = client.get(f"/api/households/{household_id}/approvals").json()
+    assert discovered["missing_ingredients"] == [{"ingredient": "yeast", "needed": 1.0, "available": 0, "shortfall": 1.0, "unit": "packet", "substitution": None}]
+    assert discovered["procurement"]["estimated_cost_inr"] == 25
+    assert approval["status"] == "approval_requested" and approvals[-1]["amount_inr"] == 25
+    app.dependency_overrides.clear()
+
+
+def test_pizza_pantry_set_uses_fast_validated_recipe_and_requests_yeast_approval(monkeypatch):
+    client, _ = make_client(monkeypatch, OllamaHealth("available", "qwen3:4b"))
+    monkeypatch.setattr(OllamaProvider, "generate_structured", lambda *_: (_ for _ in ()).throw(AssertionError("Pizza hint should not call Ollama")))
+    with client:
+        household_id = client.post("/api/demo/reset").json()["household_id"]
+        for name, quantity, unit in (("flour", 1, "kg"), ("tomato sauce", 200, "ml"), ("cheese", 200, "g"), ("oregano", 10, "g")):
+            client.post(f"/api/households/{household_id}/inventory", json={"ingredient": name, "quantity": quantity, "unit": unit})
+        pizza = client.post(f"/api/households/{household_id}/discover-dishes").json()["dishes"][0]
+        approval = client.post(f"/api/households/{household_id}/discover-dishes/approval", json={"name": pizza["name"], "ingredients": pizza["ingredients"], "servings": pizza["servings"]}).json()
+    assert pizza["name"] == "Homestyle Margherita Pizza"
+    assert [gap["ingredient"] for gap in pizza["missing_ingredients"]] == ["yeast"]
+    assert pizza["procurement"]["estimated_cost_inr"] == 25
+    assert approval["status"] == "approval_requested"
+    app.dependency_overrides.clear()
+
+
+def test_malformed_ollama_quantity_is_ignored_instead_of_causing_500(monkeypatch):
+    client, _ = make_client(monkeypatch, OllamaHealth("available", "qwen3:4b"))
+    monkeypatch.setattr(OllamaProvider, "generate_structured", lambda *_: {"dishes": [{"name": "Rice Bowl", "ingredients": [{"name": "egg", "quantity": ": ", "unit": "piece"}, {"name": "rice", "quantity": 1, "unit": "cup"}], "prep_minutes": "20", "servings": "2"}]})
+    with client:
+        household_id = client.post("/api/demo/reset").json()["household_id"]
+        response = client.post(f"/api/households/{household_id}/discover-dishes")
+    assert response.status_code == 200
+    assert response.json()["dishes"][0]["ingredients"] == [{"name": "rice", "quantity": 1.0, "unit": "cup"}]
+    app.dependency_overrides.clear()
+
+
 def test_audio_preview_supports_english_hindi_hinglish_and_manual_confirmation(monkeypatch):
     client, _ = make_client(monkeypatch, OllamaHealth("available", "qwen3:4b"))
     transcript_fixtures = json.loads((FIXTURES / "capture_transcripts.json").read_text())

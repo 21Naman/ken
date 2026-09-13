@@ -41,6 +41,7 @@ class InventoryCreate(APIModel):
     unit: str = Field(min_length=1, max_length=32)
     purchased_on: date | None = None
     expiry_date: date | None = None
+    freshness: str = "fresh"
     storage_location: str = "pantry"
     confirmed: bool = False
 
@@ -66,6 +67,12 @@ class DishCreate(APIModel):
     nutrition_notes: list[str] = []
     tags: list[str] = []
     cook_skill_required: str = "intermediate"
+
+
+class DiscoveryApprovalRequest(APIModel):
+    name: str = Field(min_length=1, max_length=120)
+    ingredients: list[dict[str, Any]] = []
+    servings: int = Field(default=2, ge=1)
 
 
 class HistoryCreate(APIModel):
@@ -140,6 +147,7 @@ class CaptureConfirm(APIModel):
     quantity: float = Field(ge=0)
     unit: str
     expiry_date: date | None = None
+    freshness: str = "fresh"
     storage_location: str = "pantry"
     confirmed: bool = False
 
@@ -149,6 +157,7 @@ class CaptureCandidate(APIModel):
     quantity: float = Field(ge=0)
     unit: str
     expiry_date: date | None = None
+    freshness: str = "fresh"
     storage_location: str = "pantry"
     readability_confidence: float = Field(ge=0, le=1)
 
