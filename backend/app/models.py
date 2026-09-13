@@ -1,7 +1,11 @@
 """Persistent Phase 1 fixtures and Phase 2 household-memory entities."""
 
-from datetime import UTC, date, datetime
+from __future__ import annotations
+
+from datetime import date, datetime, timezone
 from typing import Any
+
+UTC = timezone.utc
 
 from sqlalchemy import Column, JSON, UniqueConstraint
 from sqlmodel import Field, SQLModel
@@ -45,6 +49,31 @@ class HouseholdMember(SQLModel, table=True):
     health_constraints: list[str] = Field(sa_column=Column(JSON), default_factory=list)
     likes: list[str] = Field(sa_column=Column(JSON), default_factory=list)
     dislikes: list[str] = Field(sa_column=Column(JSON), default_factory=list)
+
+
+class GoogleCalendarConnection(SQLModel, table=True):
+    """One consented Google Calendar connection per household member."""
+    __tablename__ = "google_calendar_connections"
+    __table_args__ = (UniqueConstraint("member_id", name="uq_google_calendar_member"),)
+    id: int | None = Field(default=None, primary_key=True)
+    household_id: int = Field(foreign_key="households.id", index=True)
+    member_id: int = Field(foreign_key="household_members.id", index=True)
+    google_subject: str = Field(index=True, max_length=255)
+    google_email: str = Field(max_length=320)
+    encrypted_refresh_token: str
+    calendar_id: str | None = Field(default=None, max_length=512)
+    calendar_name: str | None = Field(default=None, max_length=255)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class GoogleOAuthState(SQLModel, table=True):
+    """Short-lived, single-use OAuth state bound to a member."""
+    __tablename__ = "google_oauth_states"
+    state: str = Field(primary_key=True, max_length=128)
+    household_id: int = Field(foreign_key="households.id", index=True)
+    member_id: int = Field(foreign_key="household_members.id", index=True)
+    expires_at: datetime
 
 
 class CookProfile(SQLModel, table=True):

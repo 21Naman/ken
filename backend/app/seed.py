@@ -1,5 +1,7 @@
 """Deterministic local fixtures for household records across diverse dietary and regional profiles."""
 
+from __future__ import annotations
+
 from datetime import date, timedelta
 from sqlmodel import Session, delete
 

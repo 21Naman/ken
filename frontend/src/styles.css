@@ -25,6 +25,11 @@ li { border-top: 1px solid #edf1ec; padding: 10px 0; }
 .autonomy.green { background: #dff1df; color: #175e2d; }.autonomy.yellow { background: #fff1cb; color: #755500; }.autonomy.red { background: #ffe1dd; color: #8b281c; }
 .memory-change { background: #f4f7f1; border-left: 3px solid #5f7867; margin-top: 14px; padding: 12px; }
 .quiet { background: transparent; color: #1d6b45; margin-left: 8px; padding: 2px 5px; }
+.calendar-control { background: #f4f7f1; border-left: 3px solid #5f7867; margin: 10px 0; padding: 8px 12px; }
+.calendar-control p { margin: 0 0 6px; }
+.connected { background: #dff1df; border-radius: 6px; color: #175e2d; display: inline-block; font-weight: 700; padding: 4px 7px; }
+.cook-brief { background: #f4f7f1; border-left: 4px solid #1d6b45; margin-top: 16px; padding: 16px; }
+.cook-brief h3 { margin-top: 0; }
 .status { border-radius: 999px; font-size: .78rem; font-weight: 700; padding: 3px 7px; text-transform: capitalize; }
 .expired { background: #ffe1dd; color: #8b281c; }.expires_today, .expiring_soon { background: #fff1cb; color: #755500; }.fresh { background: #dff1df; color: #175e2d; }.unknown { background: #e8ebea; color: #536158; }
 /* Loading bar */

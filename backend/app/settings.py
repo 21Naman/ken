@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from functools import lru_cache
 import os
 from pathlib import Path
@@ -24,6 +26,11 @@ class Settings(BaseSettings):
     whisper_model: str = "base"
     request_timeout_seconds: float = Field(default=30.0, gt=0)
     discovery_request_timeout_seconds: float = Field(default=90.0, gt=0)
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    google_redirect_uri: str = "http://127.0.0.1:8000/api/google-calendar/callback"
+    google_token_encryption_key: str | None = None
+    frontend_url: str = "http://localhost:5173"
 
     @property
     def database_path(self) -> Path | None:

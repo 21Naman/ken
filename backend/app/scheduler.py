@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlmodel import Session
 from app.database import engine

@@ -2,6 +2,10 @@ export type OllamaStatus = "available" | "unavailable" | "model_unavailable" | "
 export interface HealthResponse { status: "ok"; database: { status: "available" }; ollama: { status: OllamaStatus; model: string; detail: string | null }; scheduler: { status: "available" | "unavailable"; detail: string | null }; }
 export interface Household { id: number; name: string; default_language: string; created_at: string; }
 export interface Member { id: number; name: string; language: string; dietary_preferences: string[]; allergies: string[]; health_constraints: string[]; likes: string[]; dislikes: string[]; }
+export interface GoogleCalendarConnection { connected: boolean; email: string | null; calendar_id: string | null; calendar_name: string | null; }
+export interface GoogleCalendarOption { id: string; name: string; primary: boolean; access_role: string; }
+export interface GoogleCalendarEvent { title: string; start: string; end: string; }
+export interface CookBrief { plan_date: string; summary: string; actions: Array<{ time: string; meal: string; action: string; members: string[]; reason: string }>; questions: string[]; calendar_unavailable_for: string[]; availability_source: string; events_read: Record<string, Array<{ title: string; start: string; end: string }>>; }
 export interface CookProfile { id: number; name: string; language: string; skill_level: string; available_hours: string[]; confident_dishes: string[]; }
 export interface Budget { id: number; monthly_limit: number; spent_amount: number; planned_amount: number; category_allocations: Record<string, number>; }
 export interface InventoryLot { id: number; ingredient: string; quantity: number; unit: string; expiry_date: string | null; freshness: "fresh" | "expiring_soon" | "use_immediately"; storage_location: string; confirmed: boolean; expiry_status: string; }

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import date
 from typing import Any
 
@@ -25,6 +27,15 @@ class MemberCreate(APIModel):
     health_constraints: list[str] = []
     likes: list[str] = []
     dislikes: list[str] = []
+
+
+class CalendarSelection(APIModel):
+    calendar_id: str = Field(min_length=1, max_length=512)
+    calendar_name: str = Field(min_length=1, max_length=255)
+
+
+class CookBriefRequest(APIModel):
+    plan_date: date = Field(default_factory=date.today)
 
 
 class CookProfileWrite(APIModel):

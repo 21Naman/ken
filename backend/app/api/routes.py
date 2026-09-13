@@ -1,7 +1,17 @@
-from datetime import UTC, date, datetime, timedelta
+from __future__ import annotations
+
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, TypeVar
+from urllib.parse import urlencode
+from uuid import uuid4
+from zoneinfo import ZoneInfo
+
+def _utc(value: datetime) -> datetime:
+    """SQLite returns naive timestamps; normalize them before UTC comparisons."""
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import RedirectResponse
 import httpx
 from pydantic import BaseModel
 from sqlmodel import SQLModel, Session, select
@@ -9,8 +19,9 @@ from sqlmodel import SQLModel, Session, select
 from app.database import get_session
 from app.models import (
     ApprovalRequest, AuditEvent, Budget, CookProfile, DemoStoreItem, Dish, DishHistory, Household, HouseholdMember, InventoryLot, LocalTask,
-    Leftover, MealLoopRecord, PreferenceSignal,
+    Leftover, MealLoopRecord, PreferenceSignal, GoogleCalendarConnection, GoogleOAuthState,
 )
+from app.providers.google_calendar import GoogleCalendarError, GoogleCalendarProvider
 from app.providers.ollama import OllamaProvider
 from app.providers.whisper import WhisperProvider
 from app.providers.vision import VisionProvider
@@ -18,7 +29,7 @@ from app.repositories import Repository
 from app.schemas import (
     BudgetWrite, CookProfileWrite, DishCreate, DiscoveryApprovalRequest, HistoryCreate, HouseholdCreate,
     HouseholdUpdate, InventoryCreate, InventoryUpdate, LeftoverCreate, MealLoopCreate,
-    LoopStart, MemberCreate, PlanRequest, PreferenceCreate, TransitionRequest, ApprovalDecision, ProposedAction, OutcomeCapture, FeedbackText, CaptureConfirm, CaptureCandidate, CapturePreview,
+    LoopStart, MemberCreate, PlanRequest, PreferenceCreate, TransitionRequest, ApprovalDecision, ProposedAction, OutcomeCapture, FeedbackText, CaptureConfirm, CaptureCandidate, CapturePreview, CalendarSelection, CookBriefRequest,
 )
 from app.seed import reset_demo_data
 from app.services import expiry_status
@@ -91,6 +102,20 @@ def _delete(session: Session, model: type[T], household_id: int, item_id: int) -
     item = _scoped(session, model, household_id, item_id)
     session.delete(item)
     session.commit()
+
+
+def _calendar_connection(session: Session, household_id: int, member_id: int) -> GoogleCalendarConnection:
+    _scoped(session, HouseholdMember, household_id, member_id)
+    connection = session.exec(select(GoogleCalendarConnection).where(GoogleCalendarConnection.member_id == member_id)).first()
+    if connection is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Google Calendar is not connected for this member")
+    return connection
+
+
+def _calendar_view(connection: GoogleCalendarConnection | None) -> dict[str, Any]:
+    if connection is None:
+        return {"connected": False, "email": None, "calendar_id": None, "calendar_name": None}
+    return {"connected": True, "email": connection.google_email, "calendar_id": connection.calendar_id, "calendar_name": connection.calendar_name}
 
 
 def _inventory_view(item: InventoryLot) -> dict[str, Any]:
@@ -198,7 +223,7 @@ def update_household(household_id: int, payload: HouseholdUpdate, session: Sessi
 def delete_household(household_id: int, session: Session = Depends(get_session)) -> None:
     # Phase 2 keeps deletion explicit and removes all owned memory records first.
     _household(session, household_id)
-    for model in (HouseholdMember, CookProfile, InventoryLot, Leftover, Dish, DishHistory, Budget, PreferenceSignal, MealLoopRecord):
+    for model in (GoogleCalendarConnection, GoogleOAuthState, HouseholdMember, CookProfile, InventoryLot, Leftover, Dish, DishHistory, Budget, PreferenceSignal, MealLoopRecord):
         for item in _list(session, model, household_id):
             session.delete(item)
     session.delete(_household(session, household_id))
@@ -222,7 +247,153 @@ def update_member(household_id: int, item_id: int, payload: MemberCreate, sessio
 
 @router.delete("/households/{household_id}/members/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_member(household_id: int, item_id: int, session: Session = Depends(get_session)) -> None:
+    for model in (GoogleCalendarConnection, GoogleOAuthState):
+        for item in session.exec(select(model).where(model.member_id == item_id)):
+            session.delete(item)
+    session.commit()
     _delete(session, HouseholdMember, household_id, item_id)
+
+
+@router.get("/households/{household_id}/members/{member_id}/google-calendar")
+def get_member_google_calendar(household_id: int, member_id: int, session: Session = Depends(get_session)) -> dict[str, Any]:
+    _scoped(session, HouseholdMember, household_id, member_id)
+    connection = session.exec(select(GoogleCalendarConnection).where(GoogleCalendarConnection.member_id == member_id)).first()
+    return _calendar_view(connection)
+
+
+@router.post("/households/{household_id}/members/{member_id}/google-calendar/connect")
+def connect_member_google_calendar(household_id: int, member_id: int, settings: Settings = Depends(get_settings), session: Session = Depends(get_session)) -> dict[str, str]:
+    _scoped(session, HouseholdMember, household_id, member_id)
+    state = uuid4().hex
+    session.add(GoogleOAuthState(state=state, household_id=household_id, member_id=member_id, expires_at=datetime.now(UTC) + timedelta(minutes=10)))
+    session.commit()
+    try:
+        return {"authorization_url": GoogleCalendarProvider(settings).authorization_url(state)}
+    except GoogleCalendarError as exc:
+        state_row = session.get(GoogleOAuthState, state)
+        if state_row:
+            session.delete(state_row); session.commit()
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@router.get("/google-calendar/callback")
+def google_calendar_callback(code: str | None = None, state: str | None = None, error: str | None = None, settings: Settings = Depends(get_settings), session: Session = Depends(get_session)) -> RedirectResponse:
+    query: dict[str, str] = {"calendar_connection": "error"}
+    state_row = session.get(GoogleOAuthState, state) if state else None
+    if state_row is None or _utc(state_row.expires_at) < datetime.now(UTC) or error or not code:
+        if state_row:
+            session.delete(state_row); session.commit()
+        query["calendar_error"] = "Google Calendar connection was cancelled or expired."
+        return RedirectResponse(f"{settings.frontend_url}/?{urlencode(query)}")
+    try:
+        subject, email, encrypted_token = GoogleCalendarProvider(settings).exchange_code(code)
+        existing = session.exec(select(GoogleCalendarConnection).where(GoogleCalendarConnection.member_id == state_row.member_id)).first()
+        # A connection must be usable immediately. Google's "primary" identifier
+        # always means the signed-in member's primary calendar; the UI can still
+        # replace it with any other calendar afterwards.
+        if existing is None:
+            session.add(GoogleCalendarConnection(household_id=state_row.household_id, member_id=state_row.member_id, google_subject=subject, google_email=email, encrypted_refresh_token=encrypted_token, calendar_id="primary", calendar_name="Primary calendar"))
+        else:
+            existing.google_subject = subject; existing.google_email = email; existing.encrypted_refresh_token = encrypted_token; existing.calendar_id = "primary"; existing.calendar_name = "Primary calendar"; existing.updated_at = datetime.now(UTC)
+            session.add(existing)
+        member_id = state_row.member_id
+        session.delete(state_row); session.commit()
+        query.update({"calendar_connection": "success", "member_id": str(member_id)})
+    except GoogleCalendarError as exc:
+        session.delete(state_row); session.commit()
+        query["calendar_error"] = str(exc)
+    return RedirectResponse(f"{settings.frontend_url}/?{urlencode(query)}")
+
+
+@router.get("/households/{household_id}/members/{member_id}/google-calendar/calendars")
+def list_member_google_calendars(household_id: int, member_id: int, settings: Settings = Depends(get_settings), session: Session = Depends(get_session)) -> list[dict[str, str | bool]]:
+    try:
+        return GoogleCalendarProvider(settings).calendars(_calendar_connection(session, household_id, member_id).encrypted_refresh_token)
+    except GoogleCalendarError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@router.get("/households/{household_id}/members/{member_id}/google-calendar/events")
+def list_member_google_events(household_id: int, member_id: int, start: date, end: date, settings: Settings = Depends(get_settings), session: Session = Depends(get_session)) -> list[dict[str, str]]:
+    connection = _calendar_connection(session, household_id, member_id)
+    if connection.calendar_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Choose a Google Calendar for this member first.")
+    try:
+        return GoogleCalendarProvider(settings).events(
+            connection.encrypted_refresh_token,
+            connection.calendar_id,
+            datetime.combine(start, time.min, tzinfo=ZoneInfo("Asia/Kolkata")),
+            datetime.combine(end + timedelta(days=1), time.min, tzinfo=ZoneInfo("Asia/Kolkata")),
+            "Asia/Kolkata",
+        )
+    except GoogleCalendarError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@router.put("/households/{household_id}/members/{member_id}/google-calendar")
+def select_member_google_calendar(household_id: int, member_id: int, payload: CalendarSelection, session: Session = Depends(get_session)) -> dict[str, Any]:
+    connection = _calendar_connection(session, household_id, member_id)
+    connection.calendar_id = payload.calendar_id; connection.calendar_name = payload.calendar_name; connection.updated_at = datetime.now(UTC)
+    session.add(connection); session.commit(); session.refresh(connection)
+    return _calendar_view(connection)
+
+
+@router.delete("/households/{household_id}/members/{member_id}/google-calendar", status_code=status.HTTP_204_NO_CONTENT)
+def disconnect_member_google_calendar(household_id: int, member_id: int, session: Session = Depends(get_session)) -> None:
+    connection = _calendar_connection(session, household_id, member_id)
+    session.delete(connection); session.commit()
+
+
+@router.post("/households/{household_id}/schedule-cook-brief")
+def create_calendar_cook_brief(household_id: int, payload: CookBriefRequest, settings: Settings = Depends(get_settings), session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Create a local-AI cook brief from the actual event labels and timing selected by members."""
+    members = _list(session, HouseholdMember, household_id)
+    local_tz = ZoneInfo("Asia/Kolkata")
+    day_start = datetime.combine(payload.plan_date, time.min, tzinfo=local_tz)
+    day_end = day_start + timedelta(days=1)
+    provider = GoogleCalendarProvider(settings)
+    unavailable: list[str] = []
+    schedules: dict[str, list[dict[str, str]]] = {}
+    for member in members:
+        connection = session.exec(select(GoogleCalendarConnection).where(GoogleCalendarConnection.member_id == member.id)).first()
+        if connection is None or connection.calendar_id is None:
+            unavailable.append(member.name)
+            continue
+        try:
+            schedules[member.name] = provider.events(connection.encrypted_refresh_token, connection.calendar_id, day_start, day_end, "Asia/Kolkata")
+        except GoogleCalendarError:
+            unavailable.append(member.name)
+            continue
+    if not schedules:
+        raise HTTPException(status.HTTP_409_CONFLICT, "No member has a selected, readable Google Calendar. Connect a calendar and select it first.")
+    schedule_text = "\n".join(f"{name}: " + ("; ".join(f'{event["title"]} ({event["start"]} to {event["end"]})' for event in events) or "No events") for name, events in schedules.items())
+    cook = session.exec(select(CookProfile).where(CookProfile.household_id == household_id)).first()
+    cook_hours = ", ".join(cook.available_hours) if cook and cook.available_hours else "not provided"
+    prompt = f'''You are a household kitchen coordinator. Use ONLY this dated household schedule; do not invent events or default meal times. Calendar event titles may contain direct food instructions. Treat phrases like "want dinner", "need dinner", "dinner please", "need lunch", "packed lunch", "breakfast needed" as explicit requests: create a cook action and schedule it before the event starts. Treat "dinner out", "eating out", or "skip dinner" as no meal required. If a directive's event time seems unusual, still create the requested meal action and add one concise confirmation question about the intended serving time. Do not say no meals are needed if an event title requests food. Cook availability is {cook_hours}. Return JSON exactly in this format: {{"summary":"short summary","actions":[{{"time":"specific practical cook deadline","meal":"breakfast|packed lunch|dinner|snack","action":"what the cook should prepare","members":["names"],"reason":"cite the relevant calendar event"}}],"questions":["only unresolved questions"]}}. Household date: {payload.plan_date.isoformat()}. Calendar schedules:\n{schedule_text}'''
+    try:
+        generated = OllamaProvider(settings.ollama_base_url, settings.ollama_model, settings.request_timeout_seconds).generate_structured(prompt)
+        if not isinstance(generated.get("summary"), str) or not isinstance(generated.get("actions"), list) or not isinstance(generated.get("questions"), list):
+            raise ValueError("Calendar planner returned incomplete output")
+    except (httpx.HTTPError, ValueError) as exc:
+        # The event data is still useful if the optional local model responds
+        # with malformed JSON. Handle explicit food directives transparently.
+        actions: list[dict[str, Any]] = []
+        questions: list[str] = []
+        for member_name, events in schedules.items():
+            for event in events:
+                title = event["title"].lower()
+                requested = next((meal for phrase, meal in (("dinner", "dinner"), ("lunch", "packed lunch"), ("breakfast", "breakfast")) if phrase in title and not any(skip in title for skip in ("out", "skip", "no "))), None)
+                if not requested:
+                    continue
+                start = datetime.fromisoformat(event["start"].replace("Z", "+00:00")).astimezone(local_tz)
+                deadline = (start - timedelta(minutes=60)).strftime("%-I:%M %p")
+                actions.append({"time": deadline, "meal": requested, "action": f"Prepare {requested} before the scheduled event.", "members": [member_name], "reason": f'Calendar event: {event["title"]}.'})
+                if start.hour < 5 or start.hour > 22:
+                    questions.append(f'{member_name}\'s "{event["title"]}" is at {start.strftime("%-I:%M %p")}; confirm the intended serving time.')
+        if not actions:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"Local schedule planner is unavailable: {exc}") from exc
+        generated = {"summary": "Meal requests were inferred directly from the calendar event titles because the local model response was unavailable.", "actions": actions, "questions": questions}
+    return {"plan_date": payload.plan_date.isoformat(), "summary": generated["summary"], "actions": generated["actions"], "questions": generated["questions"], "calendar_unavailable_for": unavailable, "events_read": schedules, "availability_source": "Selected Google Calendar event titles and times"}
 
 
 @router.get("/households/{household_id}/cook-profile")
@@ -563,7 +734,7 @@ def capture_outcome(household_id: int, loop_id: int, payload: OutcomeCapture, se
     session.add(loop); session.add(AuditEvent(household_id=household_id, meal_loop_id=loop_id, event=loop.status, detail="outcome captured")); session.commit()
     return {"status": loop.status}
 
-@router.post("/households/{household_id}/cook-brief")
+@router.post("/households/{household_id}/dish-cook-brief")
 def cook_brief(household_id: int, dish: str, settings: Settings = Depends(get_settings), session: Session = Depends(get_session)) -> dict[str, Any]:
     cook = session.exec(select(CookProfile).where(CookProfile.household_id == household_id)).first()
     language = cook.language if cook else "English"
